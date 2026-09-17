@@ -194,6 +194,83 @@
   // this only drives what the Configure menu displays.
   const switchTriggerModes = new Map(); // key -> 'pulse' | 'interact' | 'roundStart' | 'turnStart'; missing = 'pulse' (the default)
   const switchEveryTurn = new Map(); // key -> bool; missing/false = off (the default). Only meaningful when switchTriggerModes.get(key) === 'turnStart'.
+  // Break/Hide/Recolor/Move's own "Trigger on:" - unlike Switch, none
+  // of these four have an Every Turn branch (Turn Start always shows a
+  // Pulse source row for them, no toggle first), so they share ONE
+  // trigger-mode map rather than each getting their own - safe because
+  // a given key only ever holds ONE logic piece at a time (the shared
+  // `logic` Map itself enforces that), so there's no cross-type
+  // collision risk in sharing storage keyed the same way.
+  const logicTriggerModes = new Map(); // key -> 'pulse' | 'interact' | 'roundStart' | 'turnStart'; missing = 'pulse' (the default)
+
+  // --- Break ---
+  const breakWarning = new Map(); // key -> bool; missing/true = on (the default, per spec's "(y)/n")
+
+  // --- Hide ---
+  const hideSequence = new Map(); // key -> bool; missing/false = off (the default)
+  const hideOpacityMode = new Map(); // key -> 'to' | 'by'; missing = 'to' (the default)
+  const hideOpacityToValue = new Map(); // key -> 0-100; missing = 0 (the default)
+  const hideOpacityByDirection = new Map(); // key -> '+' | '-'; missing = '-' (the default, per spec's "[+/(-)]")
+  const hideOpacityByValue = new Map(); // key -> 0-100; missing = 50 (the default)
+  // key -> bool; missing = contextual default (see hideReturnOnRetriggerDefault) -
+  // "to" mode defaults on, "by" mode defaults off, matching the spec's
+  // own per-branch parenthesization ("(y)/n" vs "y/(n)").
+  const hideReturnOnRetrigger = new Map();
+  const hideSequenceSteps = new Map(); // key -> array of { opacityMode, opacityToValue, opacityByDirection, opacityByValue } - only shown/used while hideSequence is on
+  const hideReturnOnLoop = new Map(); // key -> bool; missing/true = on (the default)
+
+  // --- Recolor ---
+  const recolorSequence = new Map(); // key -> bool; missing/false = off (the default)
+  const recolorColors = new Map(); // key -> { primary: hex }; missing/no primary = DEFAULT_PRIMARY_COLOR (the default) - the "Set Color" swatch, reusing the same {primary,secondary}-shaped override/picker UI as wall/texture/structure via colorMapFor's 'logic' case (secondary is simply never used - Recolor's spec has only the one color)
+  const recolorReturnOnRetrigger = new Map(); // key -> bool; missing/true = on (the default)
+  const recolorSequenceSteps = new Map(); // key -> array of { color } - only shown/used while recolorSequence is on
+  const recolorReturnOnLoop = new Map(); // key -> bool; missing/true = on (the default)
+
+  // --- Move ---
+  const moveSequence = new Map(); // key -> bool; missing/false = off (the default)
+  const moveAction = new Map(); // key -> 'move' | 'rotate'; missing = 'move' (the default)
+  const moveMode = new Map(); // key -> 'to' | 'by'; missing = 'to' (the default) - shared by both Move and Rotate, matching the spec's single "[(to), by]" selector under either action
+  const moveNewPosition = new Map(); // key -> { x, y, z }; missing = { x:0, y:0, z:0 }
+  const moveAdjust = new Map(); // key -> { x, y, z }; missing = { x:0, y:0, z:0 }
+  const moveNewRotation = new Map(); // key -> 0-3 (quarter turns); missing = 0 - driven by the same 90°-increment rotate button used everywhere else, per the person's explicit direction (no numeric input)
+  const moveRotateAdjustDirection = new Map(); // key -> '+' | '-'; missing = '+' (the default, per spec's "(+)/-")
+  const moveRotateAdjustStep = new Map(); // key -> 0-3 (quarter turns); missing = 0
+  // key -> bool; missing = contextual default (see moveReturnOnRetriggerDefault) -
+  // "to" mode defaults on, "by" mode defaults off, same rule as Hide's.
+  const moveReturnOnRetrigger = new Map();
+  const moveSequenceSteps = new Map(); // key -> array of { action, mode, newPosition, adjust, newRotation, rotateAdjustDirection, rotateAdjustStep } - only shown/used while moveSequence is on
+  const moveReturnOnLoop = new Map(); // key -> bool; missing/true = on (the default)
+
+  // Every per-instance Logic-piece setting Map declared above, in one
+  // list - used by moveItem's generic carry-across-a-move logic and by
+  // the delete call sites below, so a new setting Map only needs to be
+  // added here once rather than at every one of those sites individually.
+  // switchTriggerModes/switchEveryTurn are included too even though
+  // Switch is otherwise handled with its own explicit code elsewhere -
+  // this list is specifically the "clear/carry all Logic settings,
+  // whichever type actually owns them" mechanism.
+  const LOGIC_INSTANCE_MAPS = [
+    switchTriggerModes, switchEveryTurn,
+    logicTriggerModes,
+    breakWarning,
+    hideSequence, hideOpacityMode, hideOpacityToValue, hideOpacityByDirection, hideOpacityByValue, hideReturnOnRetrigger, hideSequenceSteps, hideReturnOnLoop,
+    recolorSequence, recolorColors, recolorReturnOnRetrigger, recolorSequenceSteps, recolorReturnOnLoop,
+    moveSequence, moveAction, moveMode, moveNewPosition, moveAdjust, moveNewRotation, moveRotateAdjustDirection, moveRotateAdjustStep, moveReturnOnRetrigger, moveSequenceSteps, moveReturnOnLoop,
+  ];
+
+  // Every Map the generic .configure-toggle-switch click handler (in
+  // both wireConfigurePanel and wireHeaderConfigureDetails) can write
+  // to, keyed by the data-toggle-map name used in its markup. A map not
+  // listed here (leverOnStates/doorOpenStates/switchEveryTurn default
+  // to "off", so they've never needed a data-toggle-default) still
+  // defaults to false when read - see that handler's own toggle logic.
+  const LOGIC_TOGGLE_MAPS_BY_NAME = {
+    leverOnStates, doorOpenStates, switchEveryTurn,
+    breakWarning,
+    hideSequence, hideReturnOnRetrigger, hideReturnOnLoop,
+    recolorSequence, recolorReturnOnRetrigger, recolorReturnOnLoop,
+    moveSequence, moveReturnOnRetrigger, moveReturnOnLoop,
+  };
   // Per-instance paint overrides, keyed the same way as the maps
   // above - a wall/texture keeps its type's default color until
   // something's actually been painted onto that specific instance.
@@ -510,6 +587,20 @@
   // subsection and the header's gear dropdown can both be showing this
   // same switch's settings at once.
   let switchTriggerDropdownOpen = null;
+  // The shared Break/Hide/Recolor/Move "Trigger on:" picker - same
+  // { key, source } shape as switchTriggerDropdownOpen, kept separate
+  // from it (rather than reused) only because it reads/writes
+  // logicTriggerModes instead of switchTriggerModes/switchEveryTurn.
+  let logicTriggerDropdownOpen = null;
+  // Every OTHER small options-dropdown across Break/Hide/Recolor/Move
+  // (Hide's opacity to/by, Move's Move/Rotate and to/by) shares this
+  // one generic slot rather than getting its own variable each -
+  // { key, source, field, stepIndex } or null. `field` names which
+  // dropdown ('opacityMode' | 'moveAction' | 'moveMode'), `stepIndex`
+  // is -1 for the single non-sequenced config or a sequence step's
+  // array index, so a step's own copy of a dropdown can be open
+  // independently of the base config's copy.
+  let logicFieldDropdownOpen = null;
 
   // The rotation (0-3 quarter-turns) that will be baked into the NEXT
   // structure (including a door - see STRUCTURE_TYPES) placed -
@@ -621,6 +712,32 @@
       logic: new Map(logic),
       switchTriggerModes: new Map(switchTriggerModes),
       switchEveryTurn: new Map(switchEveryTurn),
+      logicTriggerModes: new Map(logicTriggerModes),
+      breakWarning: new Map(breakWarning),
+      hideSequence: new Map(hideSequence),
+      hideOpacityMode: new Map(hideOpacityMode),
+      hideOpacityToValue: new Map(hideOpacityToValue),
+      hideOpacityByDirection: new Map(hideOpacityByDirection),
+      hideOpacityByValue: new Map(hideOpacityByValue),
+      hideReturnOnRetrigger: new Map(hideReturnOnRetrigger),
+      hideSequenceSteps: new Map(hideSequenceSteps), // safe as a shallow copy - steps arrays/objects are always replaced, never mutated in place (see the Add Step/edit handlers)
+      hideReturnOnLoop: new Map(hideReturnOnLoop),
+      recolorSequence: new Map(recolorSequence),
+      recolorColors: new Map(recolorColors),
+      recolorReturnOnRetrigger: new Map(recolorReturnOnRetrigger),
+      recolorSequenceSteps: new Map(recolorSequenceSteps),
+      recolorReturnOnLoop: new Map(recolorReturnOnLoop),
+      moveSequence: new Map(moveSequence),
+      moveAction: new Map(moveAction),
+      moveMode: new Map(moveMode),
+      moveNewPosition: new Map(moveNewPosition),
+      moveAdjust: new Map(moveAdjust),
+      moveNewRotation: new Map(moveNewRotation),
+      moveRotateAdjustDirection: new Map(moveRotateAdjustDirection),
+      moveRotateAdjustStep: new Map(moveRotateAdjustStep),
+      moveReturnOnRetrigger: new Map(moveReturnOnRetrigger),
+      moveSequenceSteps: new Map(moveSequenceSteps),
+      moveReturnOnLoop: new Map(moveReturnOnLoop),
       wires: wires.map((w) => ({ ...w })),
       wallColors: new Map(wallColors),
       textureColors: new Map(textureColors),
@@ -639,6 +756,33 @@
     logic.clear(); for (const [k, v] of snap.logic) logic.set(k, v);
     switchTriggerModes.clear(); for (const [k, v] of snap.switchTriggerModes) switchTriggerModes.set(k, v);
     switchEveryTurn.clear(); for (const [k, v] of snap.switchEveryTurn) switchEveryTurn.set(k, v);
+    const restoreMap = (map, snapMap) => { map.clear(); for (const [k, v] of snapMap) map.set(k, v); };
+    restoreMap(logicTriggerModes, snap.logicTriggerModes);
+    restoreMap(breakWarning, snap.breakWarning);
+    restoreMap(hideSequence, snap.hideSequence);
+    restoreMap(hideOpacityMode, snap.hideOpacityMode);
+    restoreMap(hideOpacityToValue, snap.hideOpacityToValue);
+    restoreMap(hideOpacityByDirection, snap.hideOpacityByDirection);
+    restoreMap(hideOpacityByValue, snap.hideOpacityByValue);
+    restoreMap(hideReturnOnRetrigger, snap.hideReturnOnRetrigger);
+    restoreMap(hideSequenceSteps, snap.hideSequenceSteps);
+    restoreMap(hideReturnOnLoop, snap.hideReturnOnLoop);
+    restoreMap(recolorSequence, snap.recolorSequence);
+    restoreMap(recolorColors, snap.recolorColors);
+    restoreMap(recolorReturnOnRetrigger, snap.recolorReturnOnRetrigger);
+    restoreMap(recolorSequenceSteps, snap.recolorSequenceSteps);
+    restoreMap(recolorReturnOnLoop, snap.recolorReturnOnLoop);
+    restoreMap(moveSequence, snap.moveSequence);
+    restoreMap(moveAction, snap.moveAction);
+    restoreMap(moveMode, snap.moveMode);
+    restoreMap(moveNewPosition, snap.moveNewPosition);
+    restoreMap(moveAdjust, snap.moveAdjust);
+    restoreMap(moveNewRotation, snap.moveNewRotation);
+    restoreMap(moveRotateAdjustDirection, snap.moveRotateAdjustDirection);
+    restoreMap(moveRotateAdjustStep, snap.moveRotateAdjustStep);
+    restoreMap(moveReturnOnRetrigger, snap.moveReturnOnRetrigger);
+    restoreMap(moveSequenceSteps, snap.moveSequenceSteps);
+    restoreMap(moveReturnOnLoop, snap.moveReturnOnLoop);
     wires.length = 0; for (const w of snap.wires) wires.push({ ...w });
     wallColors.clear(); for (const [k, v] of snap.wallColors) wallColors.set(k, v);
     textureColors.clear(); for (const [k, v] of snap.textureColors) textureColors.set(k, v);
@@ -858,13 +1002,19 @@
       if (rotation) textureRotations.set(newKey, rotation);
     } else if (item.category === 'logic') {
       const typeId = logic.get(oldKey);
-      const triggerMode = switchTriggerModes.get(oldKey);
-      const everyTurn = switchEveryTurn.get(oldKey);
-      logic.delete(oldKey); switchTriggerModes.delete(oldKey); switchEveryTurn.delete(oldKey);
-      switchTriggerModes.delete(newKey); switchEveryTurn.delete(newKey); // clears the DESTINATION's own stale trigger settings
+      // Every per-instance Logic setting a piece could have, across all
+      // five types - only the ones that actually apply to this key's
+      // typeId will ever be populated, but carrying the whole list is
+      // simpler and safer than a per-type branch here, and harmless for
+      // the rest (same "unused, not wrong" reasoning as leverOnStates
+      // being carried on a non-lever structure elsewhere in this
+      // function). See LOGIC_INSTANCE_MAPS for the shared list.
+      const carried = LOGIC_INSTANCE_MAPS.map((map) => map.get(oldKey));
+      logic.delete(oldKey);
+      LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(oldKey));
+      LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(newKey)); // clears the DESTINATION's own stale settings
       logic.set(newKey, typeId);
-      if (triggerMode) switchTriggerModes.set(newKey, triggerMode);
-      if (everyTurn) switchEveryTurn.set(newKey, everyTurn);
+      LOGIC_INSTANCE_MAPS.forEach((map, i) => { if (carried[i] !== undefined) map.set(newKey, carried[i]); });
     }
     updateWireReferences(oldKey, item.category, newKey, item.category);
   }
@@ -1128,8 +1278,7 @@
       if (wKey && logic.has(wKey)) {
         if (info.isGestureStart) pushUndoSnapshot();
         logic.delete(wKey);
-        switchTriggerModes.delete(wKey);
-        switchEveryTurn.delete(wKey);
+        LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(wKey));
         removeWiresReferencing(wKey, 'logic');
         window.BattleMap.requestRedraw();
         return;
@@ -1155,8 +1304,7 @@
       if (logic.has(cKey)) {
         if (info.isGestureStart) pushUndoSnapshot();
         logic.delete(cKey);
-        switchTriggerModes.delete(cKey);
-        switchEveryTurn.delete(cKey);
+        LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(cKey));
         removeWiresReferencing(cKey, 'logic');
         window.BattleMap.requestRedraw();
         return;
@@ -1203,7 +1351,7 @@
       if (info.isGestureStart) pushUndoSnapshot();
       const key = info.edge ? wallKey(info.edge) : cellKey(info.col, info.row);
       logic.set(key, selected.id);
-      switchTriggerModes.delete(key); switchEveryTurn.delete(key); // a newly placed item always starts at default settings (harmless no-op for non-switch types)
+      LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(key)); // a newly placed item always starts at default settings (harmless no-op for whichever maps don't apply to this typeId)
     } else if (selected.category === 'structure') {
       if (selected.id === 'door') {
         // Doors sit on an edge, same as a wall - not centered in a
@@ -1380,16 +1528,14 @@
         const rowMax = edge.type === 'h' ? maxRow + 1 : maxRow;
         if (edge.col >= minCol && edge.col <= colMax && edge.row >= minRow && edge.row <= rowMax) {
           logic.delete(key);
-          switchTriggerModes.delete(key);
-          switchEveryTurn.delete(key);
+          LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(key));
           removeWiresReferencing(key, 'logic');
         }
       } else {
         const [c, r] = key.split(',').map(Number);
         if (c >= minCol && c <= maxCol && r >= minRow && r <= maxRow) {
           logic.delete(key);
-          switchTriggerModes.delete(key);
-          switchEveryTurn.delete(key);
+          LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(key));
           removeWiresReferencing(key, 'logic');
         }
       }
@@ -2850,6 +2996,22 @@
     { id: 'roundStart', label: 'Round Start' },
     { id: 'turnStart', label: 'Turn Start' },
   ];
+  // Break/Hide/Recolor/Move's own "Trigger on:" options - identical
+  // set/order/labels to Switch's, reused as-is rather than duplicated.
+  const LOGIC_TRIGGER_OPTIONS = SWITCH_TRIGGER_OPTIONS;
+  // Hide's "Change opacity [(to), by]" and Move's "[(to), by]" selector -
+  // shared by both since they're the exact same to/by concept.
+  const TO_BY_OPTIONS = [
+    { id: 'to', label: 'To' },
+    { id: 'by', label: 'By' },
+  ];
+  // Move's "[(Move), Rotate]" action selector - ids stay 'move'/'rotate'
+  // (matching the underlying state/logic), only the displayed labels
+  // read "Position"/"Rotation" per the person's own naming preference.
+  const MOVE_ACTION_OPTIONS = [
+    { id: 'move', label: 'Position' },
+    { id: 'rotate', label: 'Rotation' },
+  ];
 
   const TOOL_DEFS = [
     { id: 'select', icon: SELECT_ICON, title: 'Select' },
@@ -2894,6 +3056,8 @@
       configureTarget = null; // "put down" means the selection goes with it, not just hidden until picked back up
       configureSettingsDropdownOpen = false;
       switchTriggerDropdownOpen = null;
+      logicTriggerDropdownOpen = null;
+      logicFieldDropdownOpen = null;
       cancelPendingWire(); // closing the tool abandons any wire still being built - see the person's own spec
     }
     if (wasSelect && activeTool !== 'select') {
@@ -3974,7 +4138,12 @@
   // overrides, so the rest of the Configure color UI doesn't need to
   // know the difference.
   function colorMapFor(category) {
-    return category === 'wall' ? wallColors : category === 'texture' ? textureColors : structureColors;
+    // 'logic' only ever reaches here for a Recolor piece's own "Set
+    // Color" swatch (renderRecolorColorField calls renderConfigureColorRow
+    // directly, bypassing the generic hasColors/Colors-subsection flow
+    // that the other three categories go through) - recolorColors is
+    // its dedicated per-instance store, same shape as the others.
+    return category === 'wall' ? wallColors : category === 'texture' ? textureColors : category === 'logic' ? recolorColors : structureColors;
   }
   function getItemColorOverride(item) {
     return colorMapFor(item.category).get(item.key) || {};
@@ -4005,6 +4174,7 @@
       const type = findType('texture', item.typeId);
       return { primary: (type && type.color) || DEFAULT_PRIMARY_COLOR, secondary: DEFAULT_SECONDARY_COLOR };
     }
+    if (item.category === 'logic') return { primary: DEFAULT_PRIMARY_COLOR }; // Recolor's "Set Color" - single color, no secondary concept
     return { primary: DEFAULT_PRIMARY_COLOR, secondary: DEFAULT_SECONDARY_COLOR };
   }
 
@@ -4270,6 +4440,297 @@
       if (el) el.addEventListener('input', () => applyWireSliderInput(containerEl));
     });
   }
+
+  // Tracks which range sliders (the opacity sliders below) have already
+  // had their one undo snapshot pushed for the CURRENT drag/keyboard
+  // gesture, so a whole drag - or a run of arrow-key presses - is one
+  // undo step, not one per 'input' tick. Cleared on 'change' (drag end/
+  // key release), same "one snapshot per gesture" convention as the
+  // color picker's own drag handling elsewhere in this file.
+  const rangeGestureSnapshotted = new WeakSet();
+
+  // Every click/input handler shared by Break/Hide/Recolor/Move's
+  // Settings controls - called from both wireConfigurePanel (sideScrollEl)
+  // and wireHeaderConfigureDetails (headerLeftEl), same shared-helper
+  // convention as wireWireColorRows above, so the sidebar and header
+  // copies of these controls can never drift out of sync with each other.
+  function wireLogicSettingsControls(containerEl, rerender) {
+    const FIELD_DEFS = {
+      opacityMode: { flatMap: hideOpacityMode, stepsMap: hideSequenceSteps, stepProp: 'opacityMode' },
+      moveAction: { flatMap: moveAction, stepsMap: moveSequenceSteps, stepProp: 'action' },
+      moveMode: { flatMap: moveMode, stepsMap: moveSequenceSteps, stepProp: 'mode' },
+    };
+    const DIRECTION_DEFS = {
+      hideOpacityByDirection: { flatMap: hideOpacityByDirection, stepsMap: hideSequenceSteps, stepProp: 'opacityByDirection' },
+      moveRotateAdjustDirection: { flatMap: moveRotateAdjustDirection, stepsMap: moveSequenceSteps, stepProp: 'rotateAdjustDirection' },
+    };
+    const VECTOR_MAP_DEFS = {
+      moveNewPosition: { flatMap: moveNewPosition, stepsMap: moveSequenceSteps, stepProp: 'newPosition' },
+      moveAdjust: { flatMap: moveAdjust, stepsMap: moveSequenceSteps, stepProp: 'adjust' },
+    };
+    const SLIDER_DEFS = {
+      hideOpacityToValue: { flatMap: hideOpacityToValue, stepsMap: hideSequenceSteps, stepProp: 'opacityToValue' },
+      hideOpacityByValue: { flatMap: hideOpacityByValue, stepsMap: hideSequenceSteps, stepProp: 'opacityByValue' },
+    };
+    const STEPS_MAP_BY_NAME = { hideSequenceSteps, recolorSequenceSteps, moveSequenceSteps };
+    const DEFAULT_STEP_BY_KIND = { hide: defaultHideStep, recolor: defaultRecolorStep, move: defaultMoveStep };
+
+    // Reads/writes a step-aware field: stepIndex -1 means the flat map,
+    // otherwise def.stepsMap.get(key)[stepIndex][def.stepProp].
+    function readStepAware(def, key, stepIndex, fallback) {
+      if (stepIndex === -1) return getMapOr(def.flatMap, key, fallback);
+      const step = (def.stepsMap.get(key) || [])[stepIndex];
+      return step ? step[def.stepProp] : fallback;
+    }
+    function writeStepAware(def, key, stepIndex, value) {
+      if (stepIndex === -1) { def.flatMap.set(key, value); return; }
+      const steps = (def.stepsMap.get(key) || []).slice();
+      if (!steps[stepIndex]) return;
+      steps[stepIndex] = { ...steps[stepIndex], [def.stepProp]: value };
+      def.stepsMap.set(key, steps);
+    }
+
+    // The shared "Trigger on:" picker (Break/Hide/Recolor/Move) - same
+    // open/close-toggle-then-pick shape as Switch's own copy above.
+    containerEl.querySelectorAll('[data-logic-trigger-toggle-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.logicTriggerToggleKey;
+        const source = btn.dataset.logicTriggerToggleSource;
+        const already = logicTriggerDropdownOpen && logicTriggerDropdownOpen.key === key && logicTriggerDropdownOpen.source === source;
+        logicTriggerDropdownOpen = already ? null : { key, source };
+        rerender();
+      });
+    });
+    containerEl.querySelectorAll('[data-logic-trigger-mode]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        logicTriggerModes.set(btn.dataset.logicTriggerKey, btn.dataset.logicTriggerMode);
+        logicTriggerDropdownOpen = null;
+        rerender();
+      });
+    });
+
+    // The small 2-option field dropdowns (Hide's opacity to/by, Move's
+    // action and to/by) - step-aware via readStepAware/writeStepAware.
+    containerEl.querySelectorAll('[data-logic-field-toggle-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.logicFieldToggleKey;
+        const source = btn.dataset.logicFieldToggleSource;
+        const field = btn.dataset.logicFieldToggleField;
+        const stepIndex = Number(btn.dataset.logicFieldToggleStep);
+        const already = logicFieldDropdownOpen && logicFieldDropdownOpen.key === key && logicFieldDropdownOpen.source === source && logicFieldDropdownOpen.field === field && logicFieldDropdownOpen.stepIndex === stepIndex;
+        logicFieldDropdownOpen = already ? null : { key, source, field, stepIndex };
+        rerender();
+      });
+    });
+    containerEl.querySelectorAll('[data-logic-field-value]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        const def = FIELD_DEFS[btn.dataset.logicFieldField];
+        if (def) writeStepAware(def, btn.dataset.logicFieldKey, Number(btn.dataset.logicFieldStep), btn.dataset.logicFieldValue);
+        logicFieldDropdownOpen = null;
+        window.BattleMap.requestRedraw();
+        rerender();
+      });
+    });
+
+    // The "+/-" sign buttons (Hide's opacity adjust direction, Move's
+    // rotate adjust direction) - see renderSignButton's own comment.
+    containerEl.querySelectorAll('.configure-sign-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        const def = DIRECTION_DEFS[btn.dataset.directionMap];
+        if (!def) return;
+        const stepIndex = Number(btn.dataset.directionStep);
+        const current = readStepAware(def, btn.dataset.directionKey, stepIndex, '-');
+        writeStepAware(def, btn.dataset.directionKey, stepIndex, current === '+' ? '-' : '+');
+        window.BattleMap.requestRedraw();
+        rerender();
+      });
+    });
+
+    // Move's x/y/z position fields - commits on blur/Enter, same
+    // convention as the color hex input (no re-render while typing).
+    containerEl.querySelectorAll('.configure-vector-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        const def = VECTOR_MAP_DEFS[input.dataset.vectorMap];
+        if (!def) return;
+        const stepIndex = Number(input.dataset.vectorStep);
+        const axis = input.dataset.vectorAxis;
+        const num = Number(input.value);
+        if (Number.isNaN(num)) { rerender(); return; }
+        const current = readStepAware(def, input.dataset.vectorKey, stepIndex, { x: 0, y: 0, z: 0 }) || { x: 0, y: 0, z: 0 };
+        if (current[axis] === num) return; // no actual change - don't push an undo step or re-render
+        pushUndoSnapshot();
+        writeStepAware(def, input.dataset.vectorKey, stepIndex, { ...current, [axis]: num });
+        window.BattleMap.requestRedraw();
+        rerender();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+      input.addEventListener('blur', commit);
+    });
+
+    // Move's rotate buttons (New Rotation/Adjust) - the same 90°-
+    // increment widget used for structures/textures, extended to also
+    // reach a sequence step's own copy of the value via a composite
+    // "stepsMapName:stepProp" rotateMap string (see renderRotateField).
+    containerEl.querySelectorAll('.configure-rotate-btn[data-rotate-step]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        const key = btn.dataset.rotateKey;
+        const stepIndex = Number(btn.dataset.rotateStep);
+        const rotateMap = btn.dataset.rotateMap;
+        if (stepIndex === -1) {
+          const flatMapsByName = { moveNewRotation, moveRotateAdjustStep };
+          const map = flatMapsByName[rotateMap];
+          if (!map) return;
+          map.set(key, ((map.get(key) || 0) + 1) % 4);
+        } else {
+          const [stepsMapName, stepProp] = rotateMap.split(':');
+          const stepsMap = STEPS_MAP_BY_NAME[stepsMapName];
+          if (!stepsMap) return;
+          const steps = (stepsMap.get(key) || []).slice();
+          if (!steps[stepIndex]) return;
+          steps[stepIndex] = { ...steps[stepIndex], [stepProp]: ((steps[stepIndex][stepProp] || 0) + 1) % 4 };
+          stepsMap.set(key, steps);
+        }
+        window.BattleMap.requestRedraw();
+        rerender();
+      });
+    });
+
+    // Hide's opacity sliders - live-drag, one undo snapshot per whole
+    // gesture (see rangeGestureSnapshotted's own comment), keeping the
+    // typeable percentage field (below) in sync directly rather than
+    // via a full re-render (which would tear down the slider mid-drag).
+    containerEl.querySelectorAll('.configure-opacity-slider').forEach((el) => {
+      const def = SLIDER_DEFS[el.dataset.sliderMap];
+      if (!def) return;
+      const stepIndex = Number(el.dataset.sliderStep);
+      el.addEventListener('input', () => {
+        if (!rangeGestureSnapshotted.has(el)) { pushUndoSnapshot(); rangeGestureSnapshotted.add(el); }
+        writeStepAware(def, el.dataset.sliderKey, stepIndex, Number(el.value));
+        window.BattleMap.requestRedraw();
+        const row = el.closest('.configure-slider-row');
+        const percentInput = row && row.querySelector('.configure-slider-percent-input');
+        if (percentInput) percentInput.value = el.value;
+      });
+      el.addEventListener('change', () => { rangeGestureSnapshotted.delete(el); rerender(); });
+    });
+
+    // The opacity percentage field itself - typing a number commits on
+    // blur/Enter, clamped to 0-100 (same convention as the vector
+    // inputs above: no re-render while typing, commit only reacts to a
+    // real change).
+    containerEl.querySelectorAll('.configure-slider-percent-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        const def = SLIDER_DEFS[input.dataset.percentMap];
+        if (!def) return;
+        const num = Number(input.value);
+        if (Number.isNaN(num)) { rerender(); return; }
+        const clamped = Math.max(0, Math.min(100, Math.round(num)));
+        const stepIndex = Number(input.dataset.percentStep);
+        const current = readStepAware(def, input.dataset.percentKey, stepIndex, 0);
+        if (current === clamped) { input.value = clamped; return; }
+        pushUndoSnapshot();
+        writeStepAware(def, input.dataset.percentKey, stepIndex, clamped);
+        window.BattleMap.requestRedraw();
+        rerender();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+      input.addEventListener('blur', commit);
+    });
+
+    // Recolor's per-step color swatch - opens the same shared SV-
+    // square-plus-sliders picker as the base (non-sequenced) case, just
+    // targeting {stepsMapName,key,stepIndex} instead of {category,key,
+    // which} (see getPickerTargetHex/setPickerTargetHex).
+    containerEl.querySelectorAll('[data-step-color-picker-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const target = { key: btn.dataset.stepColorPickerKey, stepsMapName: btn.dataset.stepColorPickerStepsMap, stepIndex: Number(btn.dataset.stepColorPickerIndex), source: btn.dataset.stepColorPickerSource };
+        const already = configureColorPickerOpen && configureColorPickerOpen.key === target.key && configureColorPickerOpen.stepsMapName === target.stepsMapName && configureColorPickerOpen.stepIndex === target.stepIndex && configureColorPickerOpen.source === target.source;
+        if (!already) pushUndoSnapshot();
+        configureColorPickerOpen = already ? null : target;
+        configureColorDragContainer = containerEl;
+        configureHexEditing = null;
+        window.BattleMap.requestRedraw();
+        rerender();
+      });
+    });
+    containerEl.querySelectorAll('[data-step-hex-toggle-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        configureHexEditing = { key: btn.dataset.stepHexToggleKey, stepsMapName: btn.dataset.stepHexToggleStepsMap, stepIndex: Number(btn.dataset.stepHexToggleIndex), source: btn.dataset.stepHexToggleSource };
+        configureColorPickerOpen = null;
+        rerender();
+        const input = containerEl.querySelector('.configure-step-color-hex-input');
+        if (input) { input.focus(); input.select(); }
+      });
+    });
+    containerEl.querySelectorAll('.configure-step-color-hex-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        let val = input.value.trim();
+        if (val && !val.startsWith('#')) val = '#' + val;
+        if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+          pushUndoSnapshot();
+          setPickerTargetHex({ key: input.dataset.stepHexKey, stepsMapName: input.dataset.stepHexStepsMap, stepIndex: Number(input.dataset.stepHexIndex) }, val.toLowerCase());
+          window.BattleMap.requestRedraw();
+        }
+        configureHexEditing = null;
+        rerender();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { configureHexEditing = null; rerender(); }
+      });
+      input.addEventListener('blur', commit);
+    });
+
+    // "Add Step +" - appends one default-valued step for whichever
+    // piece this is (kind: 'hide' | 'recolor' | 'move').
+    containerEl.querySelectorAll('.configure-add-step-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        const stepsMap = STEPS_MAP_BY_NAME[btn.dataset.sequenceAddMap];
+        const makeDefault = DEFAULT_STEP_BY_KIND[btn.dataset.sequenceAddKind];
+        if (!stepsMap || !makeDefault) return;
+        const key = btn.dataset.sequenceAddKey;
+        stepsMap.set(key, [...(stepsMap.get(key) || []), makeDefault()]);
+        rerender();
+      });
+    });
+    // Removing one step - indices shift after a splice, same reasoning
+    // as configureWireDropdownOpen getting cleared after a wire-remove
+    // elsewhere in this file; no per-step dropdown state needs clearing
+    // here since logicFieldDropdownOpen is keyed by {key,source,field,
+    // stepIndex} and a stale stepIndex just won't match anything real
+    // after the render that follows.
+    containerEl.querySelectorAll('.configure-sequence-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        const stepsMap = STEPS_MAP_BY_NAME[btn.dataset.sequenceRemoveMap];
+        if (!stepsMap) return;
+        const key = btn.dataset.sequenceRemoveKey;
+        const index = Number(btn.dataset.sequenceRemoveIndex);
+        stepsMap.set(key, (stepsMap.get(key) || []).filter((_, i) => i !== index));
+        logicFieldDropdownOpen = null;
+        rerender();
+      });
+    });
+  }
+
   function applyWireSVFromPointer(clientX, clientY) {
     const idKey = wireColorPickerOpen;
     const containerEl = wireColorDragContainer;
@@ -4523,6 +4984,442 @@
     `;
   }
 
+  // ---------------------------------------------------------------
+  // Break/Hide/Recolor/Move's Settings content - cosmetic-only, same
+  // status as renderSwitchTriggerSettings above (persists per-instance,
+  // undo-tracked, survives Arrange-move, resets on delete/replace -
+  // see LOGIC_INSTANCE_MAPS - but nothing reads it to actually fire
+  // anything yet). Shared between the sidebar's always-visible Settings
+  // subsection and the header's gear dropdown via the same `source`
+  // param convention as Switch's own block.
+  //
+  // A couple of small helpers first, since these four pieces share a
+  // LOT of structure (the trigger block, plain yes/no toggles, small
+  // 2-option pickers, and a "Sequence" system that turns one config
+  // into a repeatable list of them) that Switch alone didn't need.
+  // ---------------------------------------------------------------
+
+  // has()-based reads everywhere below, rather than `map.get(key) ||
+  // default` - several of these defaults are non-falsy (true, 50, '-')
+  // so `||` would silently discard a legitimately-set value of 0/false.
+  function getMapOr(map, key, def) {
+    return map.has(key) ? map.get(key) : def;
+  }
+
+  // A "+/-" sign button (Hide's opacity-adjust direction, Move's
+  // rotate-adjust direction) - a plain button showing the current sign
+  // that flips it on click, rather than an on/off switch (a switch
+  // implies a meaningful "off" state, which +/- doesn't have). Sits to
+  // the immediate left of the control it modifies (the opacity slider,
+  // the rotate button) - see wireLogicSettingsControls' DIRECTION_DEFS
+  // for the write side.
+  function renderSignButton(key, mapName, stepIndex, value) {
+    return `<button class="configure-sign-btn" data-direction-key="${key}" data-direction-map="${mapName}" data-direction-step="${stepIndex}" title="Toggle +/-">${value}</button>`;
+  }
+
+  // Every Map the STEPS system (Add Step +/remove/per-step fields) can
+  // read/write, keyed by the name used in a step's own composite
+  // "stepsMapName" reference (renderRotateField's mapName, a step color
+  // swatch's data-step-color-picker-steps-map, etc.) - one place so
+  // both rendering and wiring agree on the mapping.
+  function STEPS_MAPS() {
+    return { hideSequenceSteps, recolorSequenceSteps, moveSequenceSteps };
+  }
+
+  // The shared color-picker system (configureColorPickerOpen/
+  // configureHexEditing/applyConfigureHSV/etc.) was originally built
+  // around a flat {category,key,which} target (wall/texture/structure/
+  // Recolor's own single "Set Color"). A sequence step's own color
+  // lives inside an array element instead, so a target can ALSO be
+  // {stepsMapName,key,stepIndex} - these two functions are the one
+  // place that branches on which shape it got, so every other picker
+  // function (rendering, drag-apply, live-update) can stay shape-agnostic.
+  function getPickerTargetHex(target) {
+    if (target.stepsMapName) {
+      const stepsMap = STEPS_MAPS()[target.stepsMapName];
+      const step = (stepsMap.get(target.key) || [])[target.stepIndex];
+      return (step && step.color) || DEFAULT_PRIMARY_COLOR;
+    }
+    const overrides = getItemColorOverride({ category: target.category, key: target.key });
+    const defaults = defaultColorsFor({ category: target.category, key: target.key });
+    return overrides[target.which] || defaults[target.which];
+  }
+  function setPickerTargetHex(target, hex) {
+    if (target.stepsMapName) {
+      const stepsMap = STEPS_MAPS()[target.stepsMapName];
+      const steps = (stepsMap.get(target.key) || []).slice();
+      if (!steps[target.stepIndex]) return;
+      steps[target.stepIndex] = { ...steps[target.stepIndex], color: hex };
+      stepsMap.set(target.key, steps);
+      return;
+    }
+    setItemColorOverride({ category: target.category, key: target.key }, target.which, hex);
+  }
+
+  // Break/Hide/Recolor/Move's shared "Trigger on:" block - identical to
+  // Switch's own except there's no Every Turn branch: Turn Start goes
+  // straight to the Pulse source row here, per the spec.
+  function renderLogicTriggerSettings(item, source) {
+    const mode = getMapOr(logicTriggerModes, item.key, 'pulse');
+    const modeLabel = (LOGIC_TRIGGER_OPTIONS.find((o) => o.id === mode) || LOGIC_TRIGGER_OPTIONS[0]).label;
+    const isOpen = !!logicTriggerDropdownOpen && logicTriggerDropdownOpen.key === item.key && logicTriggerDropdownOpen.source === source;
+    const showPulseSource = mode === 'pulse' || mode === 'turnStart';
+
+    const dropdownHtml = isOpen ? `
+      <div class="header-dropdown configure-trigger-dropdown">
+        ${LOGIC_TRIGGER_OPTIONS.map((o) => `
+          <button class="header-dropdown-item${o.id === mode ? ' active' : ''}" data-logic-trigger-key="${item.key}" data-logic-trigger-mode="${o.id}" data-logic-trigger-source="${source}">${o.label}</button>
+        `).join('')}
+      </div>
+    ` : '';
+
+    return `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Trigger on:</span>
+        <div class="configure-trigger-wrap">
+          <button class="header-selection-btn configure-trigger-btn" data-logic-trigger-toggle-key="${item.key}" data-logic-trigger-toggle-source="${source}">${modeLabel}<span class="header-caret">&#9662;</span></button>
+          ${dropdownHtml}
+        </div>
+      </div>
+      ${showPulseSource ? `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Pulse source:</span>
+        <div class="configure-trigger-wrap">
+          <button class="header-selection-btn configure-trigger-btn" disabled>No wired source</button>
+        </div>
+      </div>` : ''}
+    `;
+  }
+
+  // A generic yes/no row - same visual/behavior as Switch's Every Turn
+  // toggle, but parameterized so every plain boolean setting below
+  // (Break warning, Sequence, Return on retrigger, Return on loop) can
+  // share one render path. `isDefaultOn` is baked into
+  // data-toggle-default so the click handler (wireConfigurePanel/
+  // wireHeaderConfigureDetails) knows what "currently off" means for a
+  // map that's never been explicitly set - see those handlers.
+  function renderToggleRow(label, key, mapName, isOn, isDefaultOn) {
+    return `
+      <div class="configure-position-line configure-toggle-row">
+        <span>${label}</span>
+        <button class="configure-toggle-switch${isOn ? ' on' : ''}" data-toggle-key="${key}" data-toggle-map="${mapName}" data-toggle-default="${isDefaultOn ? 'true' : 'false'}" title="${isOn ? 'On' : 'Off'}">
+          <span class="configure-toggle-thumb"></span>
+        </button>
+      </div>
+    `;
+  }
+
+  // A generic small options dropdown (Hide's opacity To/By, Move's
+  // Move/Rotate and To/By) - `field` names which one (see FIELD_DEFS
+  // below), `stepIndex` is -1 for the single non-sequenced config or a
+  // sequence step's array index, letting a step's own copy of a
+  // dropdown open independently of the base config's copy (and of any
+  // other step's copy) - see logicFieldDropdownOpen's own comment.
+  function renderFieldDropdown(key, source, field, stepIndex, options, currentId) {
+    const currentLabel = (options.find((o) => o.id === currentId) || options[0]).label;
+    const isOpen = !!logicFieldDropdownOpen && logicFieldDropdownOpen.key === key && logicFieldDropdownOpen.source === source && logicFieldDropdownOpen.field === field && logicFieldDropdownOpen.stepIndex === stepIndex;
+    const dropdownHtml = isOpen ? `
+      <div class="header-dropdown configure-trigger-dropdown">
+        ${options.map((o) => `
+          <button class="header-dropdown-item${o.id === currentId ? ' active' : ''}" data-logic-field-key="${key}" data-logic-field-source="${source}" data-logic-field-field="${field}" data-logic-field-step="${stepIndex}" data-logic-field-value="${o.id}">${o.label}</button>
+        `).join('')}
+      </div>
+    ` : '';
+    return `
+      <div class="configure-trigger-wrap configure-field-dropdown-wrap">
+        <button class="header-selection-btn configure-trigger-btn" data-logic-field-toggle-key="${key}" data-logic-field-toggle-source="${source}" data-logic-field-toggle-field="${field}" data-logic-field-toggle-step="${stepIndex}">${currentLabel}<span class="header-caret">&#9662;</span></button>
+        ${dropdownHtml}
+      </div>
+    `;
+  }
+
+  // field name -> where its value actually lives, for both the flat
+  // (stepIndex -1) case and inside a sequence step. Shared by every
+  // renderFieldDropdown call site and by wireConfigurePanel/
+  // wireHeaderConfigureDetails' one generic click handler for all of
+  // them, so adding a new small dropdown means adding one entry here
+  // rather than a new bespoke handler.
+  function FIELD_DEFS() {
+    return {
+      opacityMode: { flatMap: hideOpacityMode, stepsMap: hideSequenceSteps, stepProp: 'opacityMode' },
+      moveAction: { flatMap: moveAction, stepsMap: moveSequenceSteps, stepProp: 'action' },
+      moveMode: { flatMap: moveMode, stepsMap: moveSequenceSteps, stepProp: 'mode' },
+    };
+  }
+
+  // A plain numeric x/y/z row (Move's "New Position"/"Adjust") - commits
+  // on blur/Enter, same convention as the color hex input, rather than
+  // re-rendering on every keystroke.
+  // The dash-wrapped labels in the person's own spec ("-New Position-",
+  // "-Adjust Opacity-", etc.) are meant to read as the same small/light
+  // sub-label style already used for "Positioning"/"Settings" -
+  // reusing .configure-subsection-label directly rather than inventing
+  // a near-duplicate class.
+  function renderVectorRow(item, source, mapName, stepIndex, vec, label) {
+    const axes = ['x', 'y', 'z'];
+    return `
+      <div class="configure-position-line configure-vector-row">
+        <span class="configure-subsection-label">${label}</span>
+        <div class="configure-vector-fields">
+          ${axes.map((axis) => `
+            <label class="configure-vector-field">${axis}: <input type="number" class="configure-vector-input" data-vector-key="${item.key}" data-vector-map="${mapName}" data-vector-step="${stepIndex}" data-vector-axis="${axis}" value="${vec[axis]}"></label>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  const VECTOR_DEFS = {
+    moveNewPosition: { flatMap: moveNewPosition, stepsMap: moveSequenceSteps, stepProp: 'newPosition' },
+    moveAdjust: { flatMap: moveAdjust, stepsMap: moveSequenceSteps, stepProp: 'adjust' },
+  };
+
+  // A 90°-increment rotate control (Move's "New Rotation"/"Adjust"
+  // rotation) - the exact same widget used everywhere else in Configure
+  // for structures/textures (see the person's explicit direction: "the
+  // usual one... adds 90deg... no way to type a rotation"). Reuses the
+  // existing .configure-rotate-btn CSS/RESET_ICON; only the wiring
+  // (below) needs to know how to reach a sequence step's own copy.
+  // `signButtonHtml` is the +/- button (see renderSignButton) for the
+  // rotate-by case, rendered immediately to the rotate button's left -
+  // grouped into one .configure-rotation-controls wrapper together with
+  // the degree readout so the row's own space-between (label vs.
+  // everything else) still only ever sees two children.
+  function renderRotateField(item, mapName, stepIndex, quarterTurns, label, signButtonHtml) {
+    return `
+      <div class="configure-position-line configure-rotation-line">
+        <div class="configure-rotation-label-stack">
+          <span class="configure-subsection-label">${label}</span>
+          <span class="configure-rotation-value">${quarterTurns * 90}&deg;</span>
+        </div>
+        <div class="configure-rotation-controls">
+          ${signButtonHtml || ''}
+          <button class="configure-rotate-btn" data-rotate-key="${item.key}" data-rotate-map="${mapName}" data-rotate-step="${stepIndex}" title="Rotate 90°">${RESET_ICON}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function defaultHideStep() {
+    return { opacityMode: 'to', opacityToValue: 0, opacityByDirection: '-', opacityByValue: 50 };
+  }
+  function defaultRecolorStep() {
+    return { color: DEFAULT_PRIMARY_COLOR };
+  }
+  function defaultMoveStep() {
+    return { action: 'move', mode: 'to', newPosition: { x: 0, y: 0, z: 0 }, adjust: { x: 0, y: 0, z: 0 }, newRotation: 0, rotateAdjustDirection: '+', rotateAdjustStep: 0 };
+  }
+
+  // --- Break --------------------------------------------------------
+  // Simplest of the four - just the shared trigger block plus a single
+  // warning toggle, no Sequence system at all.
+  function renderBreakSettings(item, source) {
+    const warning = getMapOr(breakWarning, item.key, true);
+    return `
+      ${renderLogicTriggerSettings(item, source)}
+      ${renderToggleRow('Break warning', item.key, 'breakWarning', warning, true)}
+    `;
+  }
+
+  // --- Hide -----------------------------------------------------------
+  // The opacity change itself (to/by) plus its own Return on retrigger
+  // when not sequenced, or a repeatable list of the same when it is.
+  function renderHideOpacityFields(item, source, stepIndex) {
+    const isFlat = stepIndex === -1;
+    const step = isFlat ? null : ((hideSequenceSteps.get(item.key) || [])[stepIndex] || defaultHideStep());
+    const mode = isFlat ? getMapOr(hideOpacityMode, item.key, 'to') : step.opacityMode;
+    const toValue = isFlat ? getMapOr(hideOpacityToValue, item.key, 0) : step.opacityToValue;
+    const byDirection = isFlat ? getMapOr(hideOpacityByDirection, item.key, '-') : step.opacityByDirection;
+    const byValue = isFlat ? getMapOr(hideOpacityByValue, item.key, 50) : step.opacityByValue;
+    const sliderMap = mode === 'to' ? 'hideOpacityToValue' : 'hideOpacityByValue';
+    const sliderValue = mode === 'to' ? toValue : byValue;
+    const sliderLabel = mode === 'to' ? 'Set Opacity' : 'Adjust Opacity';
+
+    return `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Change opacity:</span>
+        ${renderFieldDropdown(item.key, source, 'opacityMode', stepIndex, TO_BY_OPTIONS, mode)}
+      </div>
+      <div class="configure-position-line configure-slider-row">
+        <div class="configure-slider-label-row">
+          <span class="configure-subsection-label">${sliderLabel}</span>
+          <span class="configure-slider-value-wrap">
+            <input type="text" inputmode="numeric" class="configure-slider-percent-input" data-percent-key="${item.key}" data-percent-map="${sliderMap}" data-percent-step="${stepIndex}" value="${sliderValue}">%
+          </span>
+        </div>
+        <div class="configure-slider-with-sign">
+          ${mode === 'by' ? renderSignButton(item.key, 'hideOpacityByDirection', stepIndex, byDirection) : ''}
+          <input type="range" class="configure-opacity-slider" min="0" max="100" value="${sliderValue}" data-slider-key="${item.key}" data-slider-map="${sliderMap}" data-slider-step="${stepIndex}">
+        </div>
+      </div>
+    `;
+  }
+
+  function renderHideSettings(item, source) {
+    const sequence = getMapOr(hideSequence, item.key, false);
+    const steps = hideSequenceSteps.get(item.key) || [];
+    const mode = getMapOr(hideOpacityMode, item.key, 'to');
+    const returnDefault = mode === 'to';
+    const returnOnRetrigger = getMapOr(hideReturnOnRetrigger, item.key, returnDefault);
+    const returnOnLoop = getMapOr(hideReturnOnLoop, item.key, true);
+
+    return `
+      ${renderLogicTriggerSettings(item, source)}
+      ${renderToggleRow('Sequence', item.key, 'hideSequence', sequence, false)}
+      ${!sequence ? `
+        ${renderHideOpacityFields(item, source, -1)}
+        ${renderToggleRow('Return on retrigger', item.key, 'hideReturnOnRetrigger', returnOnRetrigger, returnDefault)}
+      ` : `
+        ${steps.map((s, i) => `
+          <div class="configure-sequence-step">
+            <div class="configure-position-line configure-sequence-step-header">
+              <span>Step ${i + 1}</span>
+              <button class="configure-sequence-remove-btn" data-sequence-remove-key="${item.key}" data-sequence-remove-map="hideSequenceSteps" data-sequence-remove-index="${i}" title="Remove step">&times;</button>
+            </div>
+            ${renderHideOpacityFields(item, source, i)}
+          </div>
+        `).join('')}
+        <button class="configure-add-step-btn" data-sequence-add-key="${item.key}" data-sequence-add-map="hideSequenceSteps" data-sequence-add-kind="hide">Add Step +</button>
+        ${renderToggleRow('Return on loop', item.key, 'hideReturnOnLoop', returnOnLoop, true)}
+      `}
+    `;
+  }
+
+  // --- Recolor --------------------------------------------------------
+  function renderRecolorColorField(item, source, stepIndex) {
+    if (stepIndex === -1) {
+      // Reuses the exact same color-chip/hex/reset/picker UI as wall/
+      // texture/structure - colorMapFor treats category 'logic' as
+      // recolorColors (see that function), so this needs no bespoke
+      // picker code of its own. `source` is passed through (rather than
+      // always assuming 'sidebar') since Recolor's own Settings body is
+      // the one place this row layout is used from both surfaces - see
+      // renderConfigureColorRow's own comment.
+      return renderConfigureColorRow(item, 'primary', 'Set Color', source);
+    }
+    // A sequence step's own color - same circular-swatch-opens-the-
+    // full-picker experience as the flat case above, just backed by
+    // getPickerTargetHex/setPickerTargetHex's {stepsMapName,key,
+    // stepIndex} target shape instead of {category,key,which}, since
+    // the color lives inside an array element rather than a flat Map.
+    const hex = getPickerTargetHex({ stepsMapName: 'recolorSequenceSteps', key: item.key, stepIndex });
+    const isPickerOpen = !!(configureColorPickerOpen && configureColorPickerOpen.source === source && configureColorPickerOpen.stepsMapName === 'recolorSequenceSteps' && configureColorPickerOpen.key === item.key && configureColorPickerOpen.stepIndex === stepIndex);
+    const isHexEditing = !!(configureHexEditing && configureHexEditing.source === source && configureHexEditing.stepsMapName === 'recolorSequenceSteps' && configureHexEditing.key === item.key && configureHexEditing.stepIndex === stepIndex);
+    return `
+      <div class="configure-color-row">
+        <span class="configure-color-label settings-row-label">Color:</span>
+        <div class="configure-color-chip">
+          <button class="configure-step-color-swatch" style="background:${hex}" data-step-color-picker-key="${item.key}" data-step-color-picker-steps-map="recolorSequenceSteps" data-step-color-picker-index="${stepIndex}" data-step-color-picker-source="${source}" title="Choose color"></button>
+          ${isHexEditing
+            ? `<input type="text" class="configure-step-color-hex-input" data-step-hex-key="${item.key}" data-step-hex-steps-map="recolorSequenceSteps" data-step-hex-index="${stepIndex}" data-step-hex-source="${source}" value="${hex}" maxlength="7" spellcheck="false">`
+            : `<button class="configure-step-color-hex-btn" data-step-hex-toggle-key="${item.key}" data-step-hex-toggle-steps-map="recolorSequenceSteps" data-step-hex-toggle-index="${stepIndex}" data-step-hex-toggle-source="${source}">${hex}</button>`}
+        </div>
+        ${isPickerOpen ? renderConfigureColorPicker(hex) : ''}
+      </div>
+    `;
+  }
+
+  function renderRecolorSettings(item, source) {
+    const sequence = getMapOr(recolorSequence, item.key, false);
+    const steps = recolorSequenceSteps.get(item.key) || [];
+    const returnOnRetrigger = getMapOr(recolorReturnOnRetrigger, item.key, true);
+    const returnOnLoop = getMapOr(recolorReturnOnLoop, item.key, true);
+
+    return `
+      ${renderLogicTriggerSettings(item, source)}
+      ${renderToggleRow('Sequence', item.key, 'recolorSequence', sequence, false)}
+      ${!sequence ? `
+        ${renderRecolorColorField(item, source, -1)}
+        ${renderToggleRow('Return on retrigger', item.key, 'recolorReturnOnRetrigger', returnOnRetrigger, true)}
+      ` : `
+        ${steps.map((s, i) => `
+          <div class="configure-sequence-step">
+            <div class="configure-position-line configure-sequence-step-header">
+              <span>Step ${i + 1}</span>
+              <button class="configure-sequence-remove-btn" data-sequence-remove-key="${item.key}" data-sequence-remove-map="recolorSequenceSteps" data-sequence-remove-index="${i}" title="Remove step">&times;</button>
+            </div>
+            ${renderRecolorColorField(item, source, i)}
+          </div>
+        `).join('')}
+        <button class="configure-add-step-btn" data-sequence-add-key="${item.key}" data-sequence-add-map="recolorSequenceSteps" data-sequence-add-kind="recolor">Add Step +</button>
+        ${renderToggleRow('Return on loop', item.key, 'recolorReturnOnLoop', returnOnLoop, true)}
+      `}
+    `;
+  }
+
+  // --- Move -------------------------------------------------------
+  function renderMoveActionFields(item, source, stepIndex) {
+    const isFlat = stepIndex === -1;
+    const step = isFlat ? null : ((moveSequenceSteps.get(item.key) || [])[stepIndex] || defaultMoveStep());
+    const action = isFlat ? getMapOr(moveAction, item.key, 'move') : step.action;
+    const mode = isFlat ? getMapOr(moveMode, item.key, 'to') : step.mode;
+    const newPosition = isFlat ? getMapOr(moveNewPosition, item.key, { x: 0, y: 0, z: 0 }) : step.newPosition;
+    const adjust = isFlat ? getMapOr(moveAdjust, item.key, { x: 0, y: 0, z: 0 }) : step.adjust;
+    const newRotation = isFlat ? getMapOr(moveNewRotation, item.key, 0) : step.newRotation;
+    const rotateAdjustDirection = isFlat ? getMapOr(moveRotateAdjustDirection, item.key, '+') : step.rotateAdjustDirection;
+    const rotateAdjustStep = isFlat ? getMapOr(moveRotateAdjustStep, item.key, 0) : step.rotateAdjustStep;
+
+    // Action's two dropdowns read as one sentence ("Action: Move To") -
+    // grouped into a single tightly-packed, right-aligned wrapper so
+    // the row's own space-between (label vs. everything else) only
+    // ever sees two children, same reasoning as renderRotateField's
+    // .configure-rotation-controls grouping above.
+    return `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Change:</span>
+        <div class="configure-move-action-group">
+          ${renderFieldDropdown(item.key, source, 'moveAction', stepIndex, MOVE_ACTION_OPTIONS, action)}
+          ${renderFieldDropdown(item.key, source, 'moveMode', stepIndex, TO_BY_OPTIONS, mode)}
+        </div>
+      </div>
+      ${action === 'move' && mode === 'to' ? renderVectorRow(item, source, 'moveNewPosition', stepIndex, newPosition, 'New Position') : ''}
+      ${action === 'move' && mode === 'by' ? renderVectorRow(item, source, 'moveAdjust', stepIndex, adjust, 'Adjust Position') : ''}
+      ${action === 'rotate' && mode === 'to' ? renderRotateField(item, stepIndex === -1 ? 'moveNewRotation' : 'moveSequenceSteps:newRotation', stepIndex, newRotation, 'New Rotation') : ''}
+      ${action === 'rotate' && mode === 'by' ? renderRotateField(item, stepIndex === -1 ? 'moveRotateAdjustStep' : 'moveSequenceSteps:rotateAdjustStep', stepIndex, rotateAdjustStep, 'Adjust Rotation', renderSignButton(item.key, 'moveRotateAdjustDirection', stepIndex, rotateAdjustDirection)) : ''}
+    `;
+  }
+
+  function renderMoveSettings(item, source) {
+    const sequence = getMapOr(moveSequence, item.key, false);
+    const steps = moveSequenceSteps.get(item.key) || [];
+    const mode = getMapOr(moveMode, item.key, 'to');
+    const returnDefault = mode === 'to';
+    const returnOnRetrigger = getMapOr(moveReturnOnRetrigger, item.key, returnDefault);
+    const returnOnLoop = getMapOr(moveReturnOnLoop, item.key, true);
+
+    return `
+      ${renderLogicTriggerSettings(item, source)}
+      ${renderToggleRow('Sequence', item.key, 'moveSequence', sequence, false)}
+      ${!sequence ? `
+        ${renderMoveActionFields(item, source, -1)}
+        ${renderToggleRow('Return on retrigger', item.key, 'moveReturnOnRetrigger', returnOnRetrigger, returnDefault)}
+      ` : `
+        ${steps.map((s, i) => `
+          <div class="configure-sequence-step">
+            <div class="configure-position-line configure-sequence-step-header">
+              <span>Step ${i + 1}</span>
+              <button class="configure-sequence-remove-btn" data-sequence-remove-key="${item.key}" data-sequence-remove-map="moveSequenceSteps" data-sequence-remove-index="${i}" title="Remove step">&times;</button>
+            </div>
+            ${renderMoveActionFields(item, source, i)}
+          </div>
+        `).join('')}
+        <button class="configure-add-step-btn" data-sequence-add-key="${item.key}" data-sequence-add-map="moveSequenceSteps" data-sequence-add-kind="move">Add Step +</button>
+        ${renderToggleRow('Return on loop', item.key, 'moveReturnOnLoop', returnOnLoop, true)}
+      `}
+    `;
+  }
+
+  // One dispatcher covering all four - renderConfigureItem/
+  // renderHeaderConfigureDetails just need to know "is this one of the
+  // four" (LOGIC_SETTINGS_RENDERERS having an entry) rather than a long
+  // if/else chain at each of those two call sites.
+  const LOGIC_SETTINGS_RENDERERS = {
+    break: renderBreakSettings,
+    hide: renderHideSettings,
+    recolor: renderRecolorSettings,
+    move: renderMoveSettings,
+  };
+
   // The positioning/rotation/color/settings cluster shown once the
   // header's own item dropdown resolves to something - X/Z (see
   // renderConfigureItem's own comment on why Y is always 0 for now)
@@ -4554,7 +5451,8 @@
       toggle = { map: 'doorOpenStates', label: 'Closed/Open', isOn: doorOpenStates.get(item.key) || false };
     }
     const isSwitch = item.typeId === 'switch';
-    const hasSettings = !!toggle || isSwitch;
+    const logicRenderer = LOGIC_SETTINGS_RENDERERS[item.typeId];
+    const hasSettings = !!toggle || isSwitch || !!logicRenderer;
 
     return `
       <div class="header-position-block">
@@ -4578,7 +5476,7 @@
         ${renderHeaderConfigureResetBtn(item, 'secondary')}` : ''}
         ${hasSecondary ? `<button class="header-icon-square-btn header-swap-btn" id="configureSwapColorsBtn" data-swap-key="${item.key}" data-swap-category="${item.category}" title="Swap primary and secondary">${SWAP_ICON}</button>` : ''}
       </div>` : ''}
-      ${renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch)}
+      ${renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch, logicRenderer)}
     `;
   }
 
@@ -4611,10 +5509,10 @@
   // has no settings of its own (nothing to configure yet), otherwise
   // opens a small dropdown holding the same toggle row the sidebar
   // shows under its own "Settings" subsection.
-  function renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch) {
+  function renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch, logicRenderer) {
     const dropdownHtml = (configureSettingsDropdownOpen && hasSettings) ? `
-      <div class="header-dropdown configure-trigger-dropdown">
-        ${isSwitch ? renderSwitchTriggerSettings(item, 'header') : toggle ? `
+      <div class="header-dropdown configure-trigger-dropdown configure-settings-dropdown">
+        ${isSwitch ? renderSwitchTriggerSettings(item, 'header') : logicRenderer ? logicRenderer(item, 'header') : toggle ? `
         <div class="configure-position-line configure-toggle-row">
           <span>${toggle.label}</span>
           <button class="configure-toggle-switch${toggle.isOn ? ' on' : ''}" data-toggle-key="${item.key}" data-toggle-map="${toggle.map}" title="${toggle.isOn ? 'On' : 'Off'}">
@@ -4901,8 +5799,9 @@
       toggle = { map: 'doorOpenStates', label: 'Closed/Open', isOn: doorOpenStates.get(item.key) || false };
     }
     const isSwitch = item.typeId === 'switch';
+    const logicRenderer = LOGIC_SETTINGS_RENDERERS[item.typeId];
 
-    const hasSettings = !!toggle || isSwitch;
+    const hasSettings = !!toggle || isSwitch || !!logicRenderer;
 
     return `
       <div class="configure-item-row">
@@ -4924,7 +5823,7 @@
 
         ${hasSettings ? `
         <div class="configure-subsection-label">Settings</div>
-        ${isSwitch ? renderSwitchTriggerSettings(item, 'sidebar') : toggle ? `
+        ${isSwitch ? renderSwitchTriggerSettings(item, 'sidebar') : logicRenderer ? logicRenderer(item, 'sidebar') : toggle ? `
         <div class="configure-position-line configure-toggle-row">
           <span>${toggle.label}</span>
           <button class="configure-toggle-switch${toggle.isOn ? ' on' : ''}" data-toggle-key="${item.key}" data-toggle-map="${toggle.map}" title="${toggle.isOn ? 'On' : 'Off'}">
@@ -4940,22 +5839,30 @@
     `;
   }
 
-  function renderConfigureColorRow(item, which, label) {
+  // `source` defaults to 'sidebar' since every OTHER call site (wall/
+  // texture/structure's own generic Colors subsection) only ever
+  // renders in the sidebar - the header uses its own compact
+  // renderHeaderConfigureColorBox layout for those instead. Recolor's
+  // "Set Color" is the one case that reuses this full row layout in
+  // BOTH surfaces (see renderRecolorColorField), so it passes its own
+  // source through explicitly rather than always checking 'sidebar'.
+  function renderConfigureColorRow(item, which, label, source) {
+    source = source || 'sidebar';
     const overrides = getItemColorOverride(item);
     const defaults = defaultColorsFor(item);
     const hex = overrides[which] || defaults[which];
     const isManual = !!overrides[which];
-    const isPickerOpen = !!(configureColorPickerOpen && configureColorPickerOpen.source === 'sidebar' && configureColorPickerOpen.key === item.key && configureColorPickerOpen.category === item.category && configureColorPickerOpen.which === which);
-    const isHexEditing = !!(configureHexEditing && configureHexEditing.source === 'sidebar' && configureHexEditing.key === item.key && configureHexEditing.category === item.category && configureHexEditing.which === which);
+    const isPickerOpen = !!(configureColorPickerOpen && configureColorPickerOpen.source === source && configureColorPickerOpen.key === item.key && configureColorPickerOpen.category === item.category && configureColorPickerOpen.which === which);
+    const isHexEditing = !!(configureHexEditing && configureHexEditing.source === source && configureHexEditing.key === item.key && configureHexEditing.category === item.category && configureHexEditing.which === which);
 
     return `
       <div class="configure-color-row">
         <span class="configure-color-label settings-row-label">${label}:</span>
         <div class="configure-color-chip">
-          <button class="configure-color-circle-btn" style="background:${hex}" data-color-key="${item.key}" data-color-which="${which}" data-color-category="${item.category}" title="Choose color"></button>
+          <button class="configure-color-circle-btn" style="background:${hex}" data-color-key="${item.key}" data-color-which="${which}" data-color-category="${item.category}" data-color-source="${source}" title="Choose color"></button>
           ${isHexEditing
-            ? `<input type="text" class="configure-color-hex-input" data-hex-key="${item.key}" data-hex-which="${which}" data-hex-category="${item.category}" value="${hex}" maxlength="7" spellcheck="false">`
-            : `<button class="configure-color-hex-btn" data-hex-key="${item.key}" data-hex-which="${which}" data-hex-category="${item.category}">${hex}</button>`}
+            ? `<input type="text" class="configure-color-hex-input" data-hex-key="${item.key}" data-hex-which="${which}" data-hex-category="${item.category}" data-hex-source="${source}" value="${hex}" maxlength="7" spellcheck="false">`
+            : `<button class="configure-color-hex-btn" data-hex-key="${item.key}" data-hex-which="${which}" data-hex-category="${item.category}" data-hex-source="${source}">${hex}</button>`}
         </div>
         <button class="configure-color-reset-btn" data-reset-key="${item.key}" data-reset-which="${which}" data-reset-category="${item.category}" title="Reset to default" ${isManual ? '' : 'disabled'}>${RESET_ICON}</button>
         ${isPickerOpen ? renderConfigureColorPicker(hex) : ''}
@@ -4988,7 +5895,11 @@
   }
 
   function wireConfigurePanel() {
-    sideScrollEl.querySelectorAll('.configure-rotate-btn').forEach((btn) => {
+    // :not([data-rotate-step]) - Move's own rotate buttons carry that
+    // attribute and are handled by wireLogicSettingsControls instead
+    // (they need to reach into a sequence step sometimes), so this
+    // generic handler only ever sees structure/texture/door rotates.
+    sideScrollEl.querySelectorAll('.configure-rotate-btn:not([data-rotate-step])').forEach((btn) => {
       btn.addEventListener('click', () => {
         pushUndoSnapshot();
         const mapsByName = { doors, structureRotations, textureRotations };
@@ -5004,16 +5915,18 @@
     sideScrollEl.querySelectorAll('.configure-toggle-switch').forEach((btn) => {
       btn.addEventListener('click', () => {
         pushUndoSnapshot();
-        const mapsByName = { leverOnStates, doorOpenStates, switchEveryTurn };
+        const mapsByName = LOGIC_TOGGLE_MAPS_BY_NAME;
         const map = mapsByName[btn.dataset.toggleMap];
         if (!map) return;
         const key = btn.dataset.toggleKey;
-        map.set(key, !map.get(key));
+        const current = map.has(key) ? map.get(key) : btn.dataset.toggleDefault === 'true';
+        map.set(key, !current);
         window.BattleMap.requestRedraw();
         renderDrawTab();
         renderHeaderLeft();
       });
     });
+    wireLogicSettingsControls(sideScrollEl, () => { renderDrawTab(); renderHeaderLeft(); });
 
     // Switch's "Trigger on:" picker - same open/close-toggle-then-pick
     // shape as every other header-selection-btn dropdown in this file
@@ -5257,7 +6170,7 @@
       });
     });
 
-    headerLeftEl.querySelectorAll('.configure-rotate-btn').forEach((btn) => {
+    headerLeftEl.querySelectorAll('.configure-rotate-btn:not([data-rotate-step])').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         pushUndoSnapshot();
@@ -5295,6 +6208,69 @@
         renderDrawTab();
       });
     });
+    // Recolor's own "Set Color" row reuses renderConfigureColorRow's
+    // full row layout (chip+hex+reset+picker) in BOTH surfaces, unlike
+    // wall/texture/structure's Colors subsection which only ever
+    // appears in the sidebar (the header shows those via the separate
+    // [data-header-color-key] boxes above instead) - so this header
+    // copy of the same four handlers only ever fires for a Recolor row
+    // actually rendered here, mirroring the sidebar's own handlers.
+    headerLeftEl.querySelectorAll('.configure-color-circle-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.colorKey, which = btn.dataset.colorWhich, category = btn.dataset.colorCategory, source = btn.dataset.colorSource || 'header';
+        const alreadyOpen = configureColorPickerOpen && configureColorPickerOpen.key === key && configureColorPickerOpen.category === category && configureColorPickerOpen.which === which && configureColorPickerOpen.source === source;
+        if (!alreadyOpen) pushUndoSnapshot();
+        configureColorPickerOpen = alreadyOpen ? null : { key, which, category, source };
+        configureHexEditing = null;
+        renderHeaderLeft();
+        renderDrawTab();
+        window.BattleMap.requestRedraw();
+      });
+    });
+    headerLeftEl.querySelectorAll('.configure-color-hex-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        configureHexEditing = { key: btn.dataset.hexKey, which: btn.dataset.hexWhich, category: btn.dataset.hexCategory, source: btn.dataset.hexSource || 'header' };
+        configureColorPickerOpen = null;
+        renderHeaderLeft();
+        const input = headerLeftEl.querySelector('.configure-color-hex-input');
+        if (input) { input.focus(); input.select(); }
+      });
+    });
+    headerLeftEl.querySelectorAll('.configure-color-hex-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        const category = input.dataset.hexCategory, key = input.dataset.hexKey, which = input.dataset.hexWhich;
+        let val = input.value.trim();
+        if (val && !val.startsWith('#')) val = '#' + val;
+        if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+          pushUndoSnapshot();
+          setItemColorOverride({ category, key }, which, val.toLowerCase());
+          window.BattleMap.requestRedraw();
+        }
+        configureHexEditing = null;
+        renderHeaderLeft();
+        renderDrawTab();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { configureHexEditing = null; renderHeaderLeft(); }
+      });
+      input.addEventListener('blur', commit);
+    });
+    headerLeftEl.querySelectorAll('.configure-color-reset-btn').forEach((btn) => {
+      if (btn.disabled) return;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        clearItemColorOverride({ category: btn.dataset.resetCategory, key: btn.dataset.resetKey }, btn.dataset.resetWhich);
+        window.BattleMap.requestRedraw();
+        renderHeaderLeft();
+        renderDrawTab();
+      });
+    });
+
     const swapBtn = headerLeftEl.querySelector('#configureSwapColorsBtn');
     if (swapBtn) {
       swapBtn.addEventListener('click', (e) => {
@@ -5342,16 +6318,18 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         pushUndoSnapshot();
-        const mapsByName = { leverOnStates, doorOpenStates, switchEveryTurn };
+        const mapsByName = LOGIC_TOGGLE_MAPS_BY_NAME;
         const map = mapsByName[btn.dataset.toggleMap];
         if (!map) return;
         const key = btn.dataset.toggleKey;
-        map.set(key, !map.get(key));
+        const current = map.has(key) ? map.get(key) : btn.dataset.toggleDefault === 'true';
+        map.set(key, !current);
         window.BattleMap.requestRedraw();
         renderHeaderLeft();
         renderDrawTab();
       });
     });
+    wireLogicSettingsControls(headerLeftEl, () => { renderHeaderLeft(); renderDrawTab(); });
 
     // Switch's "Trigger on:" picker - header mirror of the sidebar
     // wiring above (see that copy's own comment).
@@ -5407,7 +6385,7 @@
 
   function applyConfigureHSV(target, h, s, v) {
     const hex = hsvToHex(h, s, v);
-    setItemColorOverride({ category: target.category, key: target.key }, target.which, hex);
+    setPickerTargetHex(target, hex);
     window.BattleMap.requestRedraw();
     updateConfigurePickerLive(h, s, v, hex, target);
   }
@@ -5437,9 +6415,14 @@
     if (hueSlider) hueSlider.style.setProperty('--track-gradient', 'linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red)');
     if (satSlider) satSlider.style.setProperty('--track-gradient', `linear-gradient(to right, ${hsvToHex(h, 0, v)}, ${hsvToHex(h, 100, v)})`);
     if (valSlider) valSlider.style.setProperty('--track-gradient', `linear-gradient(to right, ${hsvToHex(h, s, 0)}, ${hsvToHex(h, s, 100)})`);
-    document.querySelectorAll(`.configure-color-circle-btn[data-color-key="${target.key}"][data-color-category="${target.category}"][data-color-which="${target.which}"]`).forEach((btn) => { btn.style.background = hex; });
-    document.querySelectorAll(`.configure-color-hex-btn[data-hex-key="${target.key}"][data-hex-category="${target.category}"][data-hex-which="${target.which}"]`).forEach((btn) => { btn.textContent = hex; });
-    document.querySelectorAll(`.header-color-box[data-header-color-key="${target.key}"][data-header-color-category="${target.category}"][data-header-color-which="${target.which}"]`).forEach((btn) => { btn.style.background = hex; });
+    if (target.stepsMapName) {
+      document.querySelectorAll(`.configure-step-color-swatch[data-step-color-picker-key="${target.key}"][data-step-color-picker-steps-map="${target.stepsMapName}"][data-step-color-picker-index="${target.stepIndex}"]`).forEach((btn) => { btn.style.background = hex; });
+      document.querySelectorAll(`.configure-step-color-hex-btn[data-step-hex-toggle-key="${target.key}"][data-step-hex-toggle-steps-map="${target.stepsMapName}"][data-step-hex-toggle-index="${target.stepIndex}"]`).forEach((btn) => { btn.textContent = hex; });
+    } else {
+      document.querySelectorAll(`.configure-color-circle-btn[data-color-key="${target.key}"][data-color-category="${target.category}"][data-color-which="${target.which}"]`).forEach((btn) => { btn.style.background = hex; });
+      document.querySelectorAll(`.configure-color-hex-btn[data-hex-key="${target.key}"][data-hex-category="${target.category}"][data-hex-which="${target.which}"]`).forEach((btn) => { btn.textContent = hex; });
+      document.querySelectorAll(`.header-color-box[data-header-color-key="${target.key}"][data-header-color-category="${target.category}"][data-header-color-which="${target.which}"]`).forEach((btn) => { btn.style.background = hex; });
+    }
   }
 
   function renderDrawTab() {
@@ -5612,7 +6595,7 @@
     // object (never a bare falsy index) since the source/dest split -
     // still checked against null explicitly rather than as a boolean,
     // just no longer for the 0-index reason that used to apply.
-    if (!configureColorPickerOpen && !configureHexEditing && !configureItemDropdownOpen && !configureSettingsDropdownOpen && configureWireDropdownOpen === null && !wireColorPickerOpen && !wireHexEditing && !switchTriggerDropdownOpen) return;
+    if (!configureColorPickerOpen && !configureHexEditing && !configureItemDropdownOpen && !configureSettingsDropdownOpen && configureWireDropdownOpen === null && !wireColorPickerOpen && !wireHexEditing && !switchTriggerDropdownOpen && !logicTriggerDropdownOpen && !logicFieldDropdownOpen) return;
     const pickerWasOpen = !!configureColorPickerOpen || !!wireColorPickerOpen;
     configureColorPickerOpen = null;
     configureHexEditing = null;
@@ -5622,6 +6605,8 @@
     wireColorPickerOpen = null;
     wireHexEditing = null;
     switchTriggerDropdownOpen = null;
+    logicTriggerDropdownOpen = null;
+    logicFieldDropdownOpen = null;
     renderDrawTab();
     renderHeaderLeft();
     if (pickerWasOpen) window.BattleMap.requestRedraw();

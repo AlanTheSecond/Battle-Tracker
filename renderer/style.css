@@ -1157,6 +1157,28 @@ input { font-family: inherit; }
   justify-content: space-between;
   gap: 8px;
 }
+/* Label sits above its own degree readout, both left-aligned, so the
+   value reads underneath the "New Rotation"/"Adjust Rotation" label
+   instead of crowding the button group on the right. */
+.configure-rotation-label-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Move's own rotate fields (renderRotateField) group the optional +/-
+   sign button and the rotate button itself into one wrapper, so the
+   row's own space-between (label stack vs. this group) still only
+   ever has two children. */
+.configure-rotation-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.configure-rotation-value {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
 .configure-rotate-btn {
   display: flex;
   align-items: center;
@@ -1211,6 +1233,173 @@ input { font-family: inherit; }
   transform: translateX(15px);
 }
 
+/* A "+/-" sign button (Hide's opacity adjust direction, Move's rotate
+   adjust direction) - a plain button showing the current sign that
+   flips it on click, sized/styled to match .configure-rotate-btn since
+   the two usually sit right next to each other. */
+.configure-sign-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1;
+}
+.configure-sign-btn:hover {
+  border-color: var(--text-muted);
+}
+
+/* Break/Hide/Recolor/Move's shared Settings widgets - the small 2-option
+   field dropdown (opacity to/by, move action/mode), the opacity slider,
+   the x/y/z vector inputs, and the Sequence step list. */
+.configure-field-dropdown-wrap {
+  display: inline-block;
+}
+/* Move's Action row groups its two field dropdowns ("[Move] [To]")
+   tightly together and right-aligned so they read as one sentence,
+   rather than letting the row's own space-between spread them apart. */
+.configure-move-action-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.configure-slider-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.configure-slider-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.configure-slider-value-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.configure-slider-percent-input {
+  width: 30px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+  padding: 1px 3px;
+}
+/* The sign button (when present, opacity-by mode only) sits directly
+   to the slider's left, "crunching" the slider to make room rather
+   than the two competing for the same row width independently. */
+.configure-slider-with-sign {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.configure-slider-with-sign .configure-opacity-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent-active); /* BT's own maroon, in place of the browser-default blue thumb/fill */
+}
+.configure-vector-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.configure-vector-fields {
+  display: flex;
+  gap: 10px;
+}
+.configure-vector-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.configure-vector-input {
+  width: 52px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: inherit;
+  padding: 2px 4px;
+  font: inherit;
+}
+/* A sequence step's own color swatch - same circular button as the
+   base (non-sequenced) case's .configure-color-circle-btn, opening the
+   same SV-square-plus-sliders picker (see getPickerTargetHex/
+   setPickerTargetHex and renderRecolorColorField's step branch). */
+.configure-step-color-swatch {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  padding: 0;
+}
+.configure-step-color-hex-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.configure-step-color-hex-input {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+  width: 70px;
+  outline: none;
+}
+.configure-sequence-step {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.configure-sequence-step-header {
+  font-weight: 600;
+}
+.configure-sequence-remove-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted, inherit);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.configure-add-step-btn {
+  align-self: flex-start;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  margin: 4px 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 /* Switch's "Triggers on:" picker - same idea as the header's own
    category/item selection buttons (reuses .header-selection-btn/
    .header-dropdown/.header-dropdown-item directly), just wrapped in
@@ -1251,6 +1440,41 @@ input { font-family: inherit; }
   left: auto; /* hangs off the right edge of its button instead of the left - the sidebar's narrower than the header, so a left-anchored dropdown here would run off the panel */
   min-width: 140px;
   max-width: 220px;
+}
+/* The header gear's own Settings panel (Break/Hide/Recolor/Move/Switch
+   bodies, plus the plain toggle-row fallback) needs a lot more room
+   than the small option pickers that share .configure-trigger-dropdown
+   above - those stay untouched (still anchored right, still narrow).
+   This widens just the gear panel and gives its rows breathing room,
+   without touching the right/left anchoring it inherits from
+   .configure-trigger-dropdown. */
+.configure-settings-dropdown {
+  min-width: 280px;
+  max-width: 360px;
+  padding: 14px;
+  gap: 12px;
+  /* A long Sequence (several steps, each with its own dropdowns/
+     vectors/color pickers) can grow taller than the window itself.
+     Cap it at half the viewport and let it scroll internally instead
+     of running off screen - the scrollbar itself stays hairline-thin
+     so it doesn't eat into the panel's new breathing room. */
+  max-height: 50vh;
+  overflow-y: auto;
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--accent) transparent; /* Firefox */
+}
+.configure-settings-dropdown::-webkit-scrollbar {
+  width: 6px;
+}
+.configure-settings-dropdown::-webkit-scrollbar-track {
+  background: transparent;
+}
+.configure-settings-dropdown::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 3px;
+}
+.configure-settings-dropdown::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-active);
 }
 /* The source button now sits at the FAR LEFT of a two-button row
    ([Source] -> [Input]) - anchoring ITS dropdown to the right (the
