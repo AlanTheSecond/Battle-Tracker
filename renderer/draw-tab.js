@@ -183,6 +183,17 @@
   // renderOverlay/handleMapClick check for that rather than needing two
   // separate maps the way walls/textures do.
   const logic = new Map(); // key -> typeId ('switch' | 'break' | 'hide' | 'recolor' | 'move')
+  // Switch's own trigger configuration - keyed the same way as `logic`
+  // itself (edge or cell key, whichever this particular switch sits
+  // on). Missing entry means the defaults noted below apply; only
+  // ever populated for switch-type logic pieces, harmless (just
+  // unused) for any other type's key - same convention as
+  // leverOnStates being harmless on a non-lever structure. Cosmetic
+  // only for now: nothing reads these to actually fire anything yet
+  // (see "What's explicitly NOT built yet" - Play mode doesn't exist),
+  // this only drives what the Configure menu displays.
+  const switchTriggerModes = new Map(); // key -> 'pulse' | 'interact' | 'roundStart' | 'turnStart'; missing = 'pulse' (the default)
+  const switchEveryTurn = new Map(); // key -> bool; missing/false = off (the default). Only meaningful when switchTriggerModes.get(key) === 'turnStart'.
   // Per-instance paint overrides, keyed the same way as the maps
   // above - a wall/texture keeps its type's default color until
   // something's actually been painted onto that specific instance.
@@ -489,8 +500,16 @@
   let configureSelectedItem = null;
   let configureItemDropdownOpen = false;
   // The header's own gear/Settings dropdown for the selected item -
-  // covers the item's toggle-style settings row.
+  // covers the item's toggle-style settings row (lever/door) or the
+  // Switch trigger settings below.
   let configureSettingsDropdownOpen = false;
+  // Switch's own "Trigger on:" picker - { key, source: 'sidebar' |
+  // 'header' } for whichever surface's copy is currently open, or null
+  // for neither. Same .source-based mirror convention as
+  // configureColorPickerOpen, needed because the sidebar's Settings
+  // subsection and the header's gear dropdown can both be showing this
+  // same switch's settings at once.
+  let switchTriggerDropdownOpen = null;
 
   // The rotation (0-3 quarter-turns) that will be baked into the NEXT
   // structure (including a door - see STRUCTURE_TYPES) placed -
@@ -600,6 +619,8 @@
       doorOpenStates: new Map(doorOpenStates),
       leverOnStates: new Map(leverOnStates),
       logic: new Map(logic),
+      switchTriggerModes: new Map(switchTriggerModes),
+      switchEveryTurn: new Map(switchEveryTurn),
       wires: wires.map((w) => ({ ...w })),
       wallColors: new Map(wallColors),
       textureColors: new Map(textureColors),
@@ -616,6 +637,8 @@
     doorOpenStates.clear(); for (const [k, v] of snap.doorOpenStates) doorOpenStates.set(k, v);
     leverOnStates.clear(); for (const [k, v] of snap.leverOnStates) leverOnStates.set(k, v);
     logic.clear(); for (const [k, v] of snap.logic) logic.set(k, v);
+    switchTriggerModes.clear(); for (const [k, v] of snap.switchTriggerModes) switchTriggerModes.set(k, v);
+    switchEveryTurn.clear(); for (const [k, v] of snap.switchEveryTurn) switchEveryTurn.set(k, v);
     wires.length = 0; for (const w of snap.wires) wires.push({ ...w });
     wallColors.clear(); for (const [k, v] of snap.wallColors) wallColors.set(k, v);
     textureColors.clear(); for (const [k, v] of snap.textureColors) textureColors.set(k, v);
@@ -835,8 +858,13 @@
       if (rotation) textureRotations.set(newKey, rotation);
     } else if (item.category === 'logic') {
       const typeId = logic.get(oldKey);
-      logic.delete(oldKey);
+      const triggerMode = switchTriggerModes.get(oldKey);
+      const everyTurn = switchEveryTurn.get(oldKey);
+      logic.delete(oldKey); switchTriggerModes.delete(oldKey); switchEveryTurn.delete(oldKey);
+      switchTriggerModes.delete(newKey); switchEveryTurn.delete(newKey); // clears the DESTINATION's own stale trigger settings
       logic.set(newKey, typeId);
+      if (triggerMode) switchTriggerModes.set(newKey, triggerMode);
+      if (everyTurn) switchEveryTurn.set(newKey, everyTurn);
     }
     updateWireReferences(oldKey, item.category, newKey, item.category);
   }
@@ -1100,6 +1128,8 @@
       if (wKey && logic.has(wKey)) {
         if (info.isGestureStart) pushUndoSnapshot();
         logic.delete(wKey);
+        switchTriggerModes.delete(wKey);
+        switchEveryTurn.delete(wKey);
         removeWiresReferencing(wKey, 'logic');
         window.BattleMap.requestRedraw();
         return;
@@ -1125,6 +1155,8 @@
       if (logic.has(cKey)) {
         if (info.isGestureStart) pushUndoSnapshot();
         logic.delete(cKey);
+        switchTriggerModes.delete(cKey);
+        switchEveryTurn.delete(cKey);
         removeWiresReferencing(cKey, 'logic');
         window.BattleMap.requestRedraw();
         return;
@@ -1171,6 +1203,7 @@
       if (info.isGestureStart) pushUndoSnapshot();
       const key = info.edge ? wallKey(info.edge) : cellKey(info.col, info.row);
       logic.set(key, selected.id);
+      switchTriggerModes.delete(key); switchEveryTurn.delete(key); // a newly placed item always starts at default settings (harmless no-op for non-switch types)
     } else if (selected.category === 'structure') {
       if (selected.id === 'door') {
         // Doors sit on an edge, same as a wall - not centered in a
@@ -1347,12 +1380,16 @@
         const rowMax = edge.type === 'h' ? maxRow + 1 : maxRow;
         if (edge.col >= minCol && edge.col <= colMax && edge.row >= minRow && edge.row <= rowMax) {
           logic.delete(key);
+          switchTriggerModes.delete(key);
+          switchEveryTurn.delete(key);
           removeWiresReferencing(key, 'logic');
         }
       } else {
         const [c, r] = key.split(',').map(Number);
         if (c >= minCol && c <= maxCol && r >= minRow && r <= maxRow) {
           logic.delete(key);
+          switchTriggerModes.delete(key);
+          switchEveryTurn.delete(key);
           removeWiresReferencing(key, 'logic');
         }
       }
@@ -2804,6 +2841,16 @@
   // whichever tool sits at TOOL_DEFS[num-1], so this alone is what
   // moves every other tool's hotkey up by one (Place 1->2, Delete
   // 2->3, Paint 3->4, Configure 4->5) without touching that handler.
+  // Switch's "Trigger on:" options, in dropdown order. 'pulse' is the
+  // default for a freshly-placed switch (switchTriggerModes.get(key)
+  // missing == 'pulse') - see renderSwitchTriggerSettings.
+  const SWITCH_TRIGGER_OPTIONS = [
+    { id: 'pulse', label: 'Pulse' },
+    { id: 'interact', label: 'Interact' },
+    { id: 'roundStart', label: 'Round Start' },
+    { id: 'turnStart', label: 'Turn Start' },
+  ];
+
   const TOOL_DEFS = [
     { id: 'select', icon: SELECT_ICON, title: 'Select' },
     { id: 'place', icon: HAMMER_ICON, title: 'Place' },
@@ -2845,6 +2892,8 @@
     activeTool = activeTool === toolId ? null : toolId;
     if (wasConfigure && activeTool !== 'configure') {
       configureTarget = null; // "put down" means the selection goes with it, not just hidden until picked back up
+      configureSettingsDropdownOpen = false;
+      switchTriggerDropdownOpen = null;
       cancelPendingWire(); // closing the tool abandons any wire still being built - see the person's own spec
     }
     if (wasSelect && activeTool !== 'select') {
@@ -4406,6 +4455,74 @@
     `;
   }
 
+  // Switch's Settings content - "Trigger on:" plus whatever follows
+  // from that choice. Shared between the sidebar's own Settings
+  // subsection (always shown inline, per renderConfigureItem) and the
+  // header's gear dropdown (shown only while configureSettingsDropdownOpen,
+  // per renderHeaderConfigureSettingsDropdown) so the two can't drift
+  // out of sync, same reasoning as every other Configure control that
+  // appears in both places. `source` ('sidebar' | 'header') is only
+  // used to key switchTriggerDropdownOpen, so opening this dropdown on
+  // one surface doesn't affect the other's copy.
+  //
+  // Cosmetic only, per spec: this drives what the menu displays and
+  // persists per-instance (undo-tracked, survives Arrange-move, reset
+  // on delete/replace - see the switchTriggerModes/switchEveryTurn
+  // declarations and their call sites), but nothing reads it to
+  // actually fire anything yet - there's no Play mode to walk a wire
+  // graph with yet, same status as every other Logic piece.
+  //
+  // Trigger on: Pulse (default) | Interact | Round Start | Turn Start.
+  //   - Pulse: shows a "Pulse source:" row (a general item's pulse -
+  //     nothing to wire it to yet, so it always reads "No wired source").
+  //   - Interact: nothing further - the switch itself is the thing
+  //     interacted with, same as Select tool's own Interact mode
+  //     already does for lever/door.
+  //   - Round Start: nothing further - fires globally, no source to pick.
+  //   - Turn Start: shows an "Every Turn" toggle (default off). While
+  //     off, shows its own "Pulse source:" row (a specific creature's
+  //     turn this time, not a general item - still always "No wired
+  //     source" until the creature layer and real wiring exist).
+  function renderSwitchTriggerSettings(item, source) {
+    const mode = switchTriggerModes.get(item.key) || 'pulse';
+    const everyTurn = switchEveryTurn.get(item.key) || false;
+    const modeLabel = (SWITCH_TRIGGER_OPTIONS.find((o) => o.id === mode) || SWITCH_TRIGGER_OPTIONS[0]).label;
+    const isOpen = !!switchTriggerDropdownOpen && switchTriggerDropdownOpen.key === item.key && switchTriggerDropdownOpen.source === source;
+    const showPulseSource = mode === 'pulse' || (mode === 'turnStart' && !everyTurn);
+
+    const dropdownHtml = isOpen ? `
+      <div class="header-dropdown configure-trigger-dropdown">
+        ${SWITCH_TRIGGER_OPTIONS.map((o) => `
+          <button class="header-dropdown-item${o.id === mode ? ' active' : ''}" data-switch-trigger-key="${item.key}" data-switch-trigger-mode="${o.id}" data-switch-trigger-source="${source}">${o.label}</button>
+        `).join('')}
+      </div>
+    ` : '';
+
+    return `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Trigger on:</span>
+        <div class="configure-trigger-wrap">
+          <button class="header-selection-btn configure-trigger-btn" data-switch-trigger-toggle-key="${item.key}" data-switch-trigger-toggle-source="${source}">${modeLabel}<span class="header-caret">&#9662;</span></button>
+          ${dropdownHtml}
+        </div>
+      </div>
+      ${mode === 'turnStart' ? `
+      <div class="configure-position-line configure-toggle-row">
+        <span>Every Turn</span>
+        <button class="configure-toggle-switch${everyTurn ? ' on' : ''}" data-toggle-key="${item.key}" data-toggle-map="switchEveryTurn" title="${everyTurn ? 'On' : 'Off'}">
+          <span class="configure-toggle-thumb"></span>
+        </button>
+      </div>` : ''}
+      ${showPulseSource ? `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Pulse source:</span>
+        <div class="configure-trigger-wrap">
+          <button class="header-selection-btn configure-trigger-btn" disabled>No wired source</button>
+        </div>
+      </div>` : ''}
+    `;
+  }
+
   // The positioning/rotation/color/settings cluster shown once the
   // header's own item dropdown resolves to something - X/Z (see
   // renderConfigureItem's own comment on why Y is always 0 for now)
@@ -4436,7 +4553,8 @@
     } else if (item.typeId === 'door') {
       toggle = { map: 'doorOpenStates', label: 'Closed/Open', isOn: doorOpenStates.get(item.key) || false };
     }
-    const hasSettings = !!toggle;
+    const isSwitch = item.typeId === 'switch';
+    const hasSettings = !!toggle || isSwitch;
 
     return `
       <div class="header-position-block">
@@ -4460,7 +4578,7 @@
         ${renderHeaderConfigureResetBtn(item, 'secondary')}` : ''}
         ${hasSecondary ? `<button class="header-icon-square-btn header-swap-btn" id="configureSwapColorsBtn" data-swap-key="${item.key}" data-swap-category="${item.category}" title="Swap primary and secondary">${SWAP_ICON}</button>` : ''}
       </div>` : ''}
-      ${renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings)}
+      ${renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch)}
     `;
   }
 
@@ -4493,10 +4611,10 @@
   // has no settings of its own (nothing to configure yet), otherwise
   // opens a small dropdown holding the same toggle row the sidebar
   // shows under its own "Settings" subsection.
-  function renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings) {
+  function renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch) {
     const dropdownHtml = (configureSettingsDropdownOpen && hasSettings) ? `
       <div class="header-dropdown configure-trigger-dropdown">
-        ${toggle ? `
+        ${isSwitch ? renderSwitchTriggerSettings(item, 'header') : toggle ? `
         <div class="configure-position-line configure-toggle-row">
           <span>${toggle.label}</span>
           <button class="configure-toggle-switch${toggle.isOn ? ' on' : ''}" data-toggle-key="${item.key}" data-toggle-map="${toggle.map}" title="${toggle.isOn ? 'On' : 'Off'}">
@@ -4769,20 +4887,22 @@
     const hasColors = item.category !== 'logic';
     const hasSecondary = item.category !== 'wall'; // walls have no secondary color concept yet
 
-    // Lever and door each get one on/off-style setting; switches get a
-    // trigger-target picker. Nothing else has a Settings entry yet, so
-    // this is a simple type check rather than a general mechanism. Both
-    // live in their own "Settings" subsection - separate from
-    // Positioning, since neither is a position/orientation fact about
-    // the object the way X/Y/Z or Rotation are.
+    // Lever and door each get one on/off-style setting; switches get
+    // the full trigger-configuration block (see renderSwitchTriggerSettings).
+    // Nothing else has a Settings entry yet, so this is a simple type
+    // check rather than a general mechanism. All of it lives in its
+    // own "Settings" subsection - separate from Positioning, since
+    // none of it is a position/orientation fact about the object the
+    // way X/Y/Z or Rotation are.
     let toggle = null;
     if (item.typeId === 'lever') {
       toggle = { map: 'leverOnStates', label: 'Off/On', isOn: leverOnStates.get(item.key) || false };
     } else if (item.typeId === 'door') {
       toggle = { map: 'doorOpenStates', label: 'Closed/Open', isOn: doorOpenStates.get(item.key) || false };
     }
+    const isSwitch = item.typeId === 'switch';
 
-    const hasSettings = !!toggle;
+    const hasSettings = !!toggle || isSwitch;
 
     return `
       <div class="configure-item-row">
@@ -4804,7 +4924,7 @@
 
         ${hasSettings ? `
         <div class="configure-subsection-label">Settings</div>
-        ${toggle ? `
+        ${isSwitch ? renderSwitchTriggerSettings(item, 'sidebar') : toggle ? `
         <div class="configure-position-line configure-toggle-row">
           <span>${toggle.label}</span>
           <button class="configure-toggle-switch${toggle.isOn ? ' on' : ''}" data-toggle-key="${item.key}" data-toggle-map="${toggle.map}" title="${toggle.isOn ? 'On' : 'Off'}">
@@ -4884,12 +5004,40 @@
     sideScrollEl.querySelectorAll('.configure-toggle-switch').forEach((btn) => {
       btn.addEventListener('click', () => {
         pushUndoSnapshot();
-        const mapsByName = { leverOnStates, doorOpenStates };
+        const mapsByName = { leverOnStates, doorOpenStates, switchEveryTurn };
         const map = mapsByName[btn.dataset.toggleMap];
         if (!map) return;
         const key = btn.dataset.toggleKey;
         map.set(key, !map.get(key));
         window.BattleMap.requestRedraw();
+        renderDrawTab();
+        renderHeaderLeft();
+      });
+    });
+
+    // Switch's "Trigger on:" picker - same open/close-toggle-then-pick
+    // shape as every other header-selection-btn dropdown in this file
+    // (see e.g. wireHeaderWirePickers). Picking a mode is a real data
+    // change (undo-tracked, same as any other Settings mutation) even
+    // when it re-selects the current value - matches the wire endpoint
+    // dropdowns' own unconditional pushUndoSnapshot().
+    sideScrollEl.querySelectorAll('[data-switch-trigger-toggle-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.switchTriggerToggleKey;
+        const source = btn.dataset.switchTriggerToggleSource;
+        const already = switchTriggerDropdownOpen && switchTriggerDropdownOpen.key === key && switchTriggerDropdownOpen.source === source;
+        switchTriggerDropdownOpen = already ? null : { key, source };
+        renderDrawTab();
+        renderHeaderLeft();
+      });
+    });
+    sideScrollEl.querySelectorAll('[data-switch-trigger-mode]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        switchTriggerModes.set(btn.dataset.switchTriggerKey, btn.dataset.switchTriggerMode);
+        switchTriggerDropdownOpen = null;
         renderDrawTab();
         renderHeaderLeft();
       });
@@ -5194,12 +5342,36 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         pushUndoSnapshot();
-        const mapsByName = { leverOnStates, doorOpenStates };
+        const mapsByName = { leverOnStates, doorOpenStates, switchEveryTurn };
         const map = mapsByName[btn.dataset.toggleMap];
         if (!map) return;
         const key = btn.dataset.toggleKey;
         map.set(key, !map.get(key));
         window.BattleMap.requestRedraw();
+        renderHeaderLeft();
+        renderDrawTab();
+      });
+    });
+
+    // Switch's "Trigger on:" picker - header mirror of the sidebar
+    // wiring above (see that copy's own comment).
+    headerLeftEl.querySelectorAll('[data-switch-trigger-toggle-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.switchTriggerToggleKey;
+        const source = btn.dataset.switchTriggerToggleSource;
+        const already = switchTriggerDropdownOpen && switchTriggerDropdownOpen.key === key && switchTriggerDropdownOpen.source === source;
+        switchTriggerDropdownOpen = already ? null : { key, source };
+        renderHeaderLeft();
+        renderDrawTab();
+      });
+    });
+    headerLeftEl.querySelectorAll('[data-switch-trigger-mode]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        switchTriggerModes.set(btn.dataset.switchTriggerKey, btn.dataset.switchTriggerMode);
+        switchTriggerDropdownOpen = null;
         renderHeaderLeft();
         renderDrawTab();
       });
@@ -5440,7 +5612,7 @@
     // object (never a bare falsy index) since the source/dest split -
     // still checked against null explicitly rather than as a boolean,
     // just no longer for the 0-index reason that used to apply.
-    if (!configureColorPickerOpen && !configureHexEditing && !configureItemDropdownOpen && !configureSettingsDropdownOpen && configureWireDropdownOpen === null && !wireColorPickerOpen && !wireHexEditing) return;
+    if (!configureColorPickerOpen && !configureHexEditing && !configureItemDropdownOpen && !configureSettingsDropdownOpen && configureWireDropdownOpen === null && !wireColorPickerOpen && !wireHexEditing && !switchTriggerDropdownOpen) return;
     const pickerWasOpen = !!configureColorPickerOpen || !!wireColorPickerOpen;
     configureColorPickerOpen = null;
     configureHexEditing = null;
@@ -5449,6 +5621,7 @@
     configureWireDropdownOpen = null;
     wireColorPickerOpen = null;
     wireHexEditing = null;
+    switchTriggerDropdownOpen = null;
     renderDrawTab();
     renderHeaderLeft();
     if (pickerWasOpen) window.BattleMap.requestRedraw();

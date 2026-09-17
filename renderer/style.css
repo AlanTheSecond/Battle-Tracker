@@ -1222,8 +1222,19 @@ input { font-family: inherit; }
   justify-content: space-between;
   gap: 8px;
 }
+.configure-trigger-row > span {
+  /* Without this, the label wraps onto two lines inside the header's
+     narrow gear dropdown once the button on the other end of the row
+     ("Turn Start ▾", say) is wide enough to squeeze it - the button
+     already truncates its own text with an ellipsis (see
+     .configure-trigger-btn below), so it should be the one to give
+     way, not the label. */
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .configure-trigger-wrap {
   position: relative; /* anchors the dropdown panel below */
+  min-width: 0; /* lets the button inside actually shrink/ellipsis instead of overflowing the row now that the label won't */
 }
 .configure-trigger-btn {
   max-width: 160px;
