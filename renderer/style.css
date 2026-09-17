@@ -1,0 +1,1521 @@
+/* ---------- Design tokens ---------- */
+/* Off-white and dark red, deliberately distinct from Initiative
+   Tracker's navy/gold - the two apps should never be mistaken for
+   each other at a glance, even though the layout skeleton (sidebar,
+   title top-left, menu button bottom-left) matches on purpose. */
+:root {
+  --bg: #f4ede2;
+  --surface: #eee4d4;
+  --surface-mid: #f1e9db; /* blend of --surface and --bg - used for the active planner tab */
+  --surface-raised: #e4d5be;
+  --border: #cbb89a;
+
+  --accent: #7a1f1f;
+  --accent-active: #9c2b2b;
+  --accent-active-glow: rgba(156, 43, 43, 0.2);
+
+  --text: #2b241c;
+  --text-muted: #7a6f5f;
+
+  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  --font-body: "Segoe UI", -apple-system, system-ui, sans-serif;
+  --font-mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+
+button { font-family: inherit; cursor: pointer; }
+input { font-family: inherit; }
+
+/* ---------- Layout ---------- */
+.app {
+  display: flex;
+  height: 100vh;
+  position: relative; /* positioning context for the full-bleed map-viewport behind everything */
+}
+
+/* The wrapper is what actually occupies space in the flex row - its
+   width transitioning to 0 is what lets .main-col smoothly reclaim
+   the freed space. The column itself lives inside as an absolutely
+   positioned child so it can genuinely slide off-screen via
+   transform, independent of the wrapper's own width animation - see
+   .side-col-wrapper.collapsed .side-col below. */
+.side-col-wrapper {
+  position: relative;
+  width: 312px; /* 260px * 1.2 */
+  flex-shrink: 0;
+  transition: width 0.28s ease;
+}
+.side-col-wrapper.collapsed {
+  width: 0;
+}
+
+.side-col {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 312px;
+  height: 100%;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.28s ease;
+}
+.side-col-wrapper.collapsed .side-col {
+  transform: translateX(-100%);
+}
+
+/* The collapse handle. Anchored to the wrapper's right edge (not the
+   window), so as the wrapper's width animates toward 0 the handle
+   rides along with it and ends up parked at the very left edge of the
+   window once collapsed - always reachable to bring the column back. */
+.side-collapse-tab {
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 52px;
+  padding: 0;
+  background: var(--accent);
+  border: none;
+  border-radius: 0 6px 6px 0; /* flat where it touches the column, rounded on the exposed end */
+  z-index: 5;
+}
+.side-collapse-tab:hover { background: var(--accent-active); }
+
+.side-fixed-header {
+  flex: 0 0 auto;
+  padding: 20px 6px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---------- Planner-style feature tabs ---------- */
+/* Each tab carries its own dark-red outline on top/left while
+   inactive - no thin, separate divider line doing that job instead -
+   so they read as attached to the panel rather than floating above a
+   hairline. Only ONE border is ever drawn at any seam: a tab supplies
+   its own left edge but never its right edge (the next tab's left
+   edge - or, for the last tab, an explicit closing border - covers
+   that job instead). Two adjacent inactive tabs sharing a doubled-up
+   border was the previous approach (each tab drawing a full border,
+   overlapped via a -1px margin to cancel out the duplicate) - that
+   depends on exact sub-pixel alignment and can render as a visibly
+   thicker line depending on the display's scaling. Only-one-border-
+   per-seam avoids the problem outright rather than trying to cancel
+   it after the fact.
+   The panel below supplies a matching red top border, which the tabs
+   sit flush on: an inactive tab has no bottom border of its own, so
+   the panel's line shows straight through underneath it. The active
+   tab overlaps that same line by 1px with its own fill color,
+   erasing it locally so the active tab reads as fused directly onto
+   the panel - "part of the lower section" rather than a separate
+   shape sitting on top of it. */
+.side-tabs {
+  flex: 0 0 auto;
+  display: flex;
+}
+.side-tab-btn {
+  background: none;
+  border: 1px solid var(--accent);
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0; /* sharp corners */
+  padding: 3px 10px; /* short, sleek */
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.side-tab-btn:first-child {
+  border-left: none; /* flush with the app's own left edge - no line needed right at the window edge */
+}
+.side-tab-btn:last-child {
+  border-right: 1px solid var(--accent); /* only the final tab needs to close off the row */
+}
+.side-tab-btn:hover { color: var(--text); }
+.side-tab-btn.active {
+  position: relative;
+  z-index: 1; /* paints over the panel's border line where it overlaps below */
+  color: var(--accent-active);
+  font-weight: 700;
+  background: var(--surface-mid);
+  border-bottom: 1px solid var(--surface-mid); /* matches its own fill - erases that segment of the panel's line */
+  margin-bottom: -1px;
+}
+
+.side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface-mid);
+  border-top: 1px solid var(--accent);
+  padding: 0 16px 16px 16px;
+}
+/* Same treatment as Initiative Tracker's narrow-box scrollbar (see
+   .features-text there) rather than the browser's fat default one -
+   this column is narrow, same reasoning applies here too. */
+.side-scroll::-webkit-scrollbar { width: 6px; }
+.side-scroll::-webkit-scrollbar-track { background: var(--surface-mid); }
+.side-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.side-scroll::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+.side-fixed-footer {
+  flex: 0 0 auto;
+  height: 52px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+}
+
+.menu-btn {
+  background: none;
+  border: none;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 4px;
+}
+.menu-btn:hover { background: var(--surface-raised); }
+.menu-btn span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: var(--text-muted);
+  border-radius: 1px;
+}
+.menu-btn:hover span { background: var(--text); }
+
+.main-col {
+  position: relative;
+  flex: 1;
+  /* .app is a row-direction flex container, and flex items default to
+     stretching across the cross axis (align-items: stretch) - since
+     main-col now only contains the header, without this it would
+     silently stretch to the full window height anyway, sitting on
+     top of (and intercepting every click on) the map underneath for
+     the entire area below the header. align-self: flex-start caps it
+     at its actual content height instead. */
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Same rendered height as Initiative Tracker's .top-bar (58px: 14px
+   padding top/bottom + a 1px border + the content's own line height).
+   It never needs any special-casing for the sidebar collapsing -
+   .main-col is already a flex sibling of .side-col-wrapper and picks
+   up whatever width that leaves it, and this header just fills
+   .main-col's own width with justify-content: space-between, so its
+   contents redistribute across whatever room is actually there
+   instead of assuming a fixed window width. Nothing here is ever
+   pinned to an absolute screen position, which is what would let
+   something fall off-screen when the sidebar opens back up. */
+.main-top-bar {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px 0 14px; /* left side pulled in closer to the sidebar/app edge - right stays roomier for a future save button */
+  border-bottom: 1px solid var(--border);
+  background: var(--bg); /* occludes the map grid, which now extends underneath this bar too - see .map-viewport */
+}
+.header-left,
+.header-right {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.header-left {
+  gap: 14px; /* space between the tool icon row and the Mode group, when both are showing */
+}
+
+/* ---------- Header: tool icons (Place/Delete) ---------- */
+/* Same permanent-outline language as the Mode buttons below and the
+   sidebar's planner tabs, but standalone rather than flush - these
+   are independent picks, not one continuous control, so each gets
+   its own full border and a gap from its neighbor instead of sharing
+   a seam. This is now the actual tool switcher (it used to be a
+   labeled row in the sidebar) - icons instead of words since these
+   buttons are reached for constantly while drawing and a name would
+   just be slower to scan than a shape. Once a tool is picked, the
+   others disappear entirely (see renderHeaderLeft) - the one button
+   left is both the way back out (click it again to deselect) and a
+   plain readout of what's currently equipped. */
+.header-tool-row {
+  display: flex;
+  gap: 6px;
+}
+.header-tool-btn {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  color: var(--text-muted);
+}
+.header-tool-btn:hover { color: var(--text); }
+.header-tool-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* ---------- Header: undo/redo ---------- */
+/* To the right of the Mode group, only visible alongside it (i.e.
+   only once a tool is equipped) - undoing/redoing is meaningless
+   noise to show when there's no tool active to have just used it. */
+.header-undo-redo-group {
+  display: flex;
+  gap: 4px;
+  align-self: flex-end;
+  /* align-self: flex-end lines up with the bottom of the whole Mode
+     group (label + buttons), not the two buttons specifically - the
+     label above them has no equivalent up here, so without this the
+     undo/redo pair sits visibly lower than the buttons' own center.
+     Measured directly (getBoundingClientRect) rather than estimated
+     from font metrics: mode-buttons center lands at 34px from the
+     header's top, undo/redo's natural center at 44px - a fixed 10px
+     nudge closes that gap exactly. */
+  transform: translateY(-10px);
+}
+.header-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  color: var(--text-muted);
+}
+.header-icon-btn:hover:not(:disabled) { color: var(--text); }
+.header-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  border-color: var(--border);
+}
+
+/* ---------- Header: category/item selector (Place only) ---------- */
+/* Sits between the Mode buttons and undo/redo. Vertically aligned the
+   same way as undo/redo - see .header-undo-redo-group's comment for
+   why a fixed nudge, not just align-self, is what actually lines it
+   up with the Mode buttons rather than the whole Mode block. */
+.header-selection-group {
+  display: flex;
+  gap: 6px;
+  align-self: flex-end;
+  transform: translateY(-10px);
+}
+.header-selection-item {
+  position: relative; /* anchors the dropdown panel, which is positioned absolute against this */
+}
+.header-selection-btn {
+  height: 26px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.header-selection-btn:hover { color: var(--text); }
+.header-selection-preview-btn { padding: 0 6px 0 8px; }
+.header-selection-preview-btn svg {
+  /* The preview SVGs (wallSwatchSvg/textureSwatchSvg) render at a
+     fixed native 50x30 - this button never constrained that down to
+     its own 26px height, so the preview rendered at full size and
+     spilled out of the button entirely. Explicit CSS size here
+     overrides the SVG's own width/height attributes. */
+  display: block;
+  width: 30px;
+  height: 18px;
+}
+.header-caret {
+  font-size: 8px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.header-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20; /* above the map */
+  background: var(--surface-raised);
+  border: 1px solid var(--accent);
+  display: flex;
+  flex-direction: column;
+}
+.header-category-dropdown {
+  min-width: 110px;
+}
+.header-dropdown-item {
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  font-size: 11px;
+  text-align: left;
+  color: var(--text-muted);
+}
+.header-dropdown-item:last-child { border-bottom: none; }
+.header-dropdown-item:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--text);
+}
+.header-dropdown-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.header-dropdown-item.active {
+  color: var(--accent-active);
+  font-weight: 700;
+}
+
+.header-item-dropdown {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  /* A flex-wrap container with no explicit width sizes itself to its
+     max-content width, which for a wrapping row is just the widest
+     single item - not the max-width bound - so it never actually got
+     wide enough to wrap into a second column at all. An explicit
+     width (not just max-width) is what forces real wrapping: sized
+     for exactly two 42px swatch columns plus the gap between them. */
+  width: 108px;
+}
+.header-dropdown-swatch {
+  width: 42px;
+  height: 26px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.header-dropdown-swatch:hover { border-color: var(--text-muted); }
+.header-dropdown-swatch.active { border-color: var(--accent-active); }
+.header-dropdown-swatch svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Header: Paint tool (primary/secondary/swap) ---------- */
+.header-paint-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-end;
+  transform: translateY(-10px); /* same measured nudge as undo/redo and the selection group, so all three line up on one row */
+}
+.header-color-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.header-color-box-wrap {
+  position: relative; /* anchors the color wheel dropdown */
+}
+.header-color-box {
+  display: block;
+  width: 28px;
+  height: 15px;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+}
+/* Shared sizing/styling for small square icon buttons in the Paint
+   bar (swap, eyedropper) - both header and sidebar versions reuse
+   this rather than duplicating the box model twice. */
+.header-icon-square-btn {
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  color: var(--text-muted);
+}
+.header-icon-square-btn:hover { color: var(--text); }
+.header-icon-square-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.header-icon-square-btn:disabled:hover { color: var(--text-muted); }
+.header-swap-btn svg {
+  transform: rotate(90deg); /* the icon itself was drawn for a left-right swap - rotating it is simpler and more honest than redrawing a second icon for what's the same action, just now swapping two stacked boxes instead of two side-by-side ones. Only the swap button gets this - the eyedropper icon has no left-right "direction" to correct. */
+}
+
+/* ---------- Sidebar: Paint Mode ---------- */
+/* Replaces the usual Walls/Textures/Structures/Logic sections while
+   the Paint tool is equipped - see renderDrawTab. */
+.paint-mode-panel {
+  padding-top: 16px;
+}
+.paint-picker-row {
+  display: flex;
+  gap: 10px;
+}
+.sv-square {
+  position: relative;
+  /* Sized so this row's total width (square + gap + preview column)
+     lines up exactly with the sliders' own width below (230px) -
+     188 + 10 (gap) + 32 (preview column) = 230. */
+  width: 188px;
+  height: 188px;
+  flex-shrink: 0;
+  cursor: crosshair;
+  border: 1px solid var(--border);
+  /* Same white/black-fade-over-pure-hue technique as the header's
+     wheel, just mapped to a square instead of a disc: saturation
+     left-to-right, value/brightness top-to-bottom. --sv-hue is set
+     inline per-render (and live-updated while dragging/sliding - see
+     updatePaintPanelLive) rather than baked into the gradient string
+     itself. */
+  background:
+    linear-gradient(to bottom, transparent, #000),
+    linear-gradient(to right, #fff, transparent),
+    hsl(var(--sv-hue), 100%, 50%);
+}
+.sv-square-marker {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.paint-preview-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.paint-preview-item {
+  position: relative; /* anchors the reset badge in the corner */
+  width: 32px;
+  height: 32px;
+}
+.paint-reset-btn {
+  position: absolute;
+  bottom: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+.paint-reset-btn:not(:disabled):hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.paint-reset-btn:disabled {
+  /* Greyed out until that color's been manually tweaked - see
+     primaryManuallySet/secondaryManuallySet. */
+  opacity: 0.25;
+  cursor: default;
+}
+
+.paint-color-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr); /* 5 columns, up to 3 rows (15) for Recent - see MAX_RECENT_COLORS */
+  gap: 5px;
+  max-width: 230px;
+  margin-top: 8px;
+}
+.paint-color-chip {
+  width: 100%;
+  height: 21px; /* half of what aspect-ratio: 1 gave it at this grid's ~42px column width */
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.paint-color-chip:hover { border-color: var(--accent-active); }
+
+.paint-color-chip-wrap {
+  position: relative; /* anchors the removal-confirmation popup below it */
+}
+.paint-confirm-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 25; /* above the map */
+  width: 108px;
+  box-sizing: border-box;
+  background: var(--surface-raised);
+  border: 1px solid var(--accent);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.paint-confirm-text {
+  font-size: 11px;
+  color: var(--text);
+  text-align: center;
+}
+.paint-confirm-buttons {
+  display: flex;
+  gap: 5px;
+}
+.paint-confirm-yes,
+.paint-confirm-no {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+}
+.paint-confirm-yes {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+.paint-confirm-yes:hover { background: #c0392b; color: #fff; }
+.paint-confirm-no:hover { color: var(--text); border-color: var(--text-muted); }
+
+.paint-preview-swatch {
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--border);
+}
+.paint-preview-swatch.selected {
+  border-width: 3px;
+  border-color: var(--accent-active); /* the boldened outline marking which of primary/secondary is currently targeted by the square and sliders */
+}
+
+.paint-sliders {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px; /* was 10px - closer together per request */
+  max-width: 230px;
+}
+.paint-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.paint-slider-row label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* -webkit-appearance: none on both the input and its pseudo-elements
+   hands the entire look over to this CSS - nothing left for the OS/
+   Chromium default styling to draw, which is what was causing the
+   "tail" (the native track normally shades the played/left portion
+   differently from the rest, like a progress bar) - here the track's
+   own background is a single continuous gradient representing the
+   channel itself (hue/saturation/brightness), the same color on both
+   sides of the thumb, so there's nothing to look like a trailing fill
+   in the first place. --track-gradient is set inline per-slider (and
+   live-updated - see updatePaintPanelLive/renderPaintModePanel) since
+   saturation and brightness's gradients depend on the other current
+   channel values, not just a fixed rainbow like hue's. */
+.paint-slider-row input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 16px;
+  background: transparent;
+  margin: 0;
+}
+.paint-slider-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 10px;
+  border: 1px solid var(--border);
+  background: var(--track-gradient);
+}
+.paint-slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -3px; /* centers the 14px thumb on the 10px track (14-10)/2, accounting for the track's 1px border on each side */
+  border-radius: 50%;
+  background: #fff; /* explicitly white, per request - not accent/theme colored */
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+
+.header-color-dropdown {
+  align-items: stretch;
+  padding: 10px;
+  gap: 8px;
+}
+.header-mini-palette-dropdown {
+  padding: 8px;
+  /* Without this, the empty state (renderColorChipGrid returns a
+     plain <p>, not the width:85px .header-mini-palette grid) leaves
+     this flex column with nothing to size itself against, so it
+     shrinks to a narrow auto width and wraps "None yet." mid-word.
+     Matching the grid's own width keeps the dropdown the same size
+     whether or not it currently has any colors in it. */
+  min-width: 85px;
+}
+.header-mini-palette-dropdown .menu-placeholder {
+  white-space: nowrap;
+}
+/* 2 columns wide - Recents shows at most 3 (2 rows), Favorites can
+   hold any number and scrolls once it exceeds a 3-row-tall viewport
+   (see .header-mini-palette-scrollable). Reuses the exact same chips/
+   confirm-popup markup as the sidebar's own Recent/Favorites grid
+   (see renderColorChipGrid) - just a narrower column count. */
+.header-mini-palette {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 5px;
+  width: 85px;
+}
+.header-mini-palette-scrollable {
+  max-height: 73px; /* 3 rows of 21px chips + 2 row-gaps */
+  overflow-y: auto;
+}
+/* Same thin themed scrollbar as .side-scroll, rather than the browser
+   default - see the .side-scroll rules above for the reference. */
+.header-mini-palette-scrollable::-webkit-scrollbar { width: 6px; }
+.header-mini-palette-scrollable::-webkit-scrollbar-track { background: var(--surface-mid); }
+.header-mini-palette-scrollable::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.header-mini-palette-scrollable::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+/* Scaled-down versions of the sidebar's own .sv-square/.paint-sliders
+   - same underlying markup/behavior (see renderColorDropdown), just
+   sized to fit a header dropdown instead of the sidebar column. */
+.sv-square-mini {
+  width: 110px;
+  height: 110px;
+}
+.paint-sliders-mini {
+  width: 110px;
+  gap: 3px;
+}
+.paint-sliders-mini .paint-slider-row label {
+  font-size: 10px;
+}
+
+/* ---------- Header: tool Mode (Click/Line/Drag/Selection) ---------- */
+/* Same visual language as the sidebar's planner tabs (sharp corners,
+   flush together, a permanent red outline) so the two read as the
+   same UI system rather than two different button styles - see
+   .side-tab-btn for the original version of this "only one border
+   per seam" technique. Stacked vertically here instead of
+   horizontally, so the shared edge is the middle button-to-button
+   border instead of a side-to-side one, but the principle (never let
+   two elements each draw a border on the same seam) is identical.
+   Sized to fit inside the header's own 58px height with room to
+   spare (label + two buttons was previously taller than the header
+   itself), and to fit "Selection" - the longest label used here -
+   without wrapping. */
+.header-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.header-mode-label {
+  font-size: 9px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.header-mode-buttons {
+  display: flex;
+  flex-direction: column;
+  width: 58px; /* fixed, so both buttons are identically sized regardless of word length - wide enough for "Selection" without wrapping */
+}
+.header-mode-btn {
+  width: 100%;
+  box-sizing: border-box;
+  background: none;
+  border: 1px solid var(--accent);
+  border-bottom: none;
+  border-radius: 0;
+  padding: 3px 0;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.header-mode-btn:last-child {
+  border-bottom: 1px solid var(--accent);
+}
+.header-mode-btn:hover { color: var(--text); }
+.header-mode-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* Wire mode's header picker pair - the same source/destination
+   gesture the sidebar's "+"/"Connected to:" flow drives, just a
+   second surface for it (see renderHeaderWirePickers' own comment).
+   Reuses .header-selection-btn/.header-dropdown for the look, same as
+   Configure's sidebar trigger/wire dropdowns do. */
+.header-wire-picker-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.header-wire-picker-btn {
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-wire-picker-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.header-wire-arrow {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Configure header's Edit-mode cluster - item dropdown (reuses
+   .header-selection-btn/.configure-trigger-btn, same as the wire
+   pickers above) followed by this compact positioning/rotation/color/
+   settings group once an item's resolved. Kept deliberately tight -
+   this is the "quick tool for those who don't want the sidebar open"
+   version, not a second copy of the sidebar's own spaced-out layout. */
+.header-position-block {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.header-position-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.header-configure-details.configure-rotation-line {
+  gap: 4px;
+}
+.header-configure-details .configure-rotate-btn {
+  width: 16px;
+  height: 16px;
+}
+.header-color-reset-stack {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ---------- Battlemap ---------- */
+/* Deliberately NOT part of the sidebar/header's flex layout at all -
+   this always spans the entire .app, full stop, regardless of
+   whether the sidebar is open, collapsed, or mid-animation. Earlier
+   attempts kept the map as a flex sibling that resized alongside the
+   sidebar (even after decoupling the canvas's own backing store from
+   that resize) - any resizing of this element's box was still "the
+   map adjusting." Taking it out of the flex flow entirely removes
+   that possibility outright: the sidebar (position: relative,
+   painted after this in DOM order - see .side-col-wrapper) and the
+   header (same) simply sit on top of a map that never moves or
+   resizes for any reason related to the sidebar. */
+.map-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--bg);
+  /* move/all-scroll instead of grab/grabbing: grab and grabbing are
+     rendered by Chromium as synthesized cursor bitmaps rather than a
+     plain native OS cursor, which is exactly the kind of thing that
+     can intermittently render as a blank/corrupted cursor under
+     render-thread pressure - the same underlying class of problem the
+     redraw-batching and canvas-decoupling fixes targeted. Both
+     structural fixes should have removed that pressure already, but
+     since the cursor issue was still being reported, this removes
+     the remaining suspect rather than leaving it in "probably fine
+     now" territory. */
+  cursor: move;
+}
+.map-viewport.panning {
+  cursor: all-scroll;
+}
+.map-viewport.paint-mode {
+  cursor: crosshair;
+}
+#mapCanvas {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Generic right-click context menu (see draw-tab.js's
+   showMapContextMenu) - Wire mode's item picker is its first use, not
+   something specific to it. Positioned by JS (left/top set directly,
+   in viewport-relative CSS px) to wherever it was opened; fixed there
+   afterward, same as any standard context menu - it's expected to
+   close (an item picked, or a click elsewhere) well before anything
+   would pan underneath it. Anchored by its own top-left corner rather
+   than centered, so it opens down-and-right from the cursor instead of
+   straddling it - the small 4px nudge just keeps it from sitting
+   flush against the exact pixel that was clicked. Reuses
+   .header-dropdown-item for its option buttons - same look as the
+   header/sidebar pickers, just in a standalone floating box instead of
+   hanging off a button. */
+.map-context-menu {
+  display: none;
+  position: absolute;
+  z-index: 20; /* above the map, same layer the header/sidebar dropdowns use */
+  transform: translate(4px, 4px);
+  background: var(--surface-raised);
+  border: 1px solid var(--accent);
+  flex-direction: column;
+  min-width: 120px;
+  max-width: 220px;
+  pointer-events: none; /* re-enabled below, only while actually shown - a hidden empty box shouldn't ever intercept clicks meant for the map underneath it */
+}
+.map-context-menu.visible {
+  display: flex;
+  pointer-events: auto;
+}
+
+/* ---------- Sidebar title ---------- */
+.app-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: normal;
+  letter-spacing: 0.02em;
+  margin: 0;
+  color: var(--text);
+  user-select: none; /* repeated/rapid clicks on the map could otherwise land a text selection on the logo itself */
+}
+.app-title span {
+  color: var(--accent);
+  font-style: italic;
+}
+
+/* ---------- App menu modal ---------- */
+/* Same shell as Initiative Tracker's menu modal - Settings only for
+   now, more tabs (Guide, Credits, etc.) can slot in later the same
+   way they did over there. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+.modal-backdrop.hidden { display: none; }
+
+.modal-box {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+.menu-box {
+  max-width: 760px;
+  width: 90vw;
+  max-height: 80vh;
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+}
+.menu-close-btn {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  z-index: 1;
+}
+.menu-close-btn:hover { color: var(--text); }
+
+.menu-layout {
+  display: flex;
+  height: 80vh;
+  max-height: 600px;
+}
+
+.menu-tabs {
+  flex: 0 0 160px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 44px 0 12px 0;
+}
+.menu-version {
+  margin-top: auto;
+  padding: 10px 20px 0 20px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.menu-tab-btn {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 10px 20px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-left: 2px solid transparent;
+}
+.menu-tab-btn:hover { color: var(--text); background: var(--surface); }
+.menu-tab-btn.active {
+  color: var(--accent-active);
+  border-left-color: var(--accent-active);
+  background: var(--surface);
+  font-weight: 600;
+}
+
+.menu-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 44px 32px 24px 32px;
+}
+.menu-content h3 {
+  font-family: var(--font-display);
+  font-weight: normal;
+  font-size: 20px;
+  color: var(--text);
+  margin: 0 0 20px 0;
+}
+
+/* ---------- Settings rows ---------- */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  max-width: 480px;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row-label {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  max-width: 480px;
+}
+.settings-section-header h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ---------- Settings: Connections ---------- */
+.connection-row { max-width: 480px; }
+.connection-status-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #8a8478; /* dull grey - not connected */
+  flex-shrink: 0;
+}
+.connection-status-dot.connected {
+  background: #a6c93b; /* peridot green - connected */
+}
+
+/* ---------- Draw tab ---------- */
+.draw-section-header-first {
+  border-top: none;
+  margin-top: 12px;
+  padding-top: 0;
+}
+
+/* ---------- Configure tool ---------- */
+.configure-item-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+  max-width: 280px;
+}
+.configure-item-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.configure-item-row:last-child {
+  border-bottom: none;
+}
+.configure-item-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* Same border/radius/background treatment as .draw-swatch (the Place
+   menu's own swatch buttons) so a previewed item looks like it came
+   from the same picker, just fixed-size rather than 100%-of-grid-
+   column since there's no grid here. */
+.configure-item-preview {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 30px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.configure-item-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.configure-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.configure-item-type {
+  color: var(--text-muted);
+}
+.configure-item-name {
+  font-weight: 600;
+}
+
+.configure-subsection-label {
+  font-size: 9px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.configure-position-line {
+  font-size: 13px;
+  color: var(--text);
+}
+.configure-rotation-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.configure-rotate-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+.configure-rotate-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+/* Lever's Off/On and door's Closed/Open - the only two per-instance
+   boolean settings so far, sharing one small switch component rather
+   than each getting bespoke markup. */
+.configure-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.configure-toggle-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 19px;
+  padding: 0;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+.configure-toggle-switch.on {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
+}
+.configure-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--bg);
+  transition: transform 0.12s ease;
+}
+.configure-toggle-switch.on .configure-toggle-thumb {
+  transform: translateX(15px);
+}
+
+/* Switch's "Triggers on:" picker - same idea as the header's own
+   category/item selection buttons (reuses .header-selection-btn/
+   .header-dropdown/.header-dropdown-item directly), just wrapped in
+   its own positioning context since it lives in the sidebar instead
+   of the header. */
+.configure-trigger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.configure-trigger-wrap {
+  position: relative; /* anchors the dropdown panel below */
+}
+.configure-trigger-btn {
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.configure-trigger-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.configure-trigger-dropdown {
+  right: 0;
+  left: auto; /* hangs off the right edge of its button instead of the left - the sidebar's narrower than the header, so a left-anchored dropdown here would run off the panel */
+  min-width: 140px;
+  max-width: 220px;
+}
+/* The source button now sits at the FAR LEFT of a two-button row
+   ([Source] -> [Input]) - anchoring ITS dropdown to the right (the
+   default above) makes it hang off the button's right edge, which is
+   already near the sidebar's own left edge, so a wide dropdown had
+   nowhere to go but off the visible panel. Anchoring left instead
+   opens it into the room the row itself occupies, which stays on
+   screen. The destination button (further right in that same row)
+   keeps the default right-anchor - it has the opposite problem, with
+   too little room to its right instead. */
+.configure-trigger-wrap-source .configure-trigger-dropdown {
+  left: 0;
+  right: auto;
+}
+.configure-trigger-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Wire mode's own item rows - the "+" sits at the far right of the
+   header (same row as the preview/type/name), connection rows and the
+   live destination picker stack below it as ordinary
+   .configure-position-line rows, reusing that class rather than
+   inventing new ones. */
+.configure-wire-plus-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+.configure-wire-plus-btn:hover {
+  border-color: var(--accent-active);
+  color: var(--accent-active);
+}
+.configure-wire-connection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+}
+.configure-wire-connection-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0; /* lets configure-trigger-btn's own ellipsis truncation actually kick in inside a flex child */
+}
+/* Two endpoint buttons now share this row instead of one label plus
+   one dropdown - .configure-trigger-btn's usual 160px max-width was
+   sized for a single button and would overflow the sidebar's width
+   with two of them side by side, so this narrows just the pair here. */
+.configure-wire-connection-main .configure-trigger-btn {
+  max-width: 84px;
+}
+.configure-wire-arrow {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.configure-wire-remove-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.configure-wire-remove-btn:hover {
+  color: #c0392b; /* Delete's own red, for a destructive action, but only on hover - not tinted red at rest like Delete's map highlight */
+}
+
+.configure-color-row {
+  position: relative; /* anchors the color picker dropdown below */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.configure-color-label {
+  flex-shrink: 0;
+  width: 72px;
+}
+.configure-rotate-btn svg,
+.configure-color-reset-btn svg {
+  width: 12px;
+  height: 12px;
+}
+/* The circle and hex code are visually one pill (shared background/
+   border/radius) even though the two inner elements are independently
+   clickable - the circle opens the picker, the hex becomes an input -
+   same split-button idea as a lot of the header's own compound
+   controls. */
+.configure-color-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-mid);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 3px 10px 3px 3px;
+  flex: 1;
+  min-width: 0;
+}
+.configure-color-circle-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  padding: 0;
+}
+.configure-color-hex-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.configure-color-hex-input {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+  width: 70px;
+  outline: none;
+}
+.configure-color-reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+.configure-color-reset-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.configure-color-reset-btn:disabled {
+  opacity: 0.3;
+}
+/* Wire color row - same chip/hex/reset look as Edit mode's own color
+   rows (share .configure-color-row/.configure-color-chip directly),
+   using the same circle-button-plus-SV-square-picker Edit mode uses -
+   entirely separate classes for the hex/reset controls so this row's
+   event wiring (see wireWireColorRows) can never cross-fire with Edit
+   mode's own generic color handlers, which query by class and run
+   regardless of which mode is actually showing. */
+.configure-wire-color-row {
+  margin-top: 4px;
+}
+.configure-wire-color-native {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  overflow: hidden;
+  background: none;
+  cursor: pointer;
+}
+/* Firefox/WebKit both render a swatch inside a padded frame by
+   default for type=color - stripping that padding/border down to
+   nothing is what makes the input itself look like a plain color
+   circle rather than a little rectangle with a color chip inside. */
+.configure-wire-color-native::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.configure-wire-color-native::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+.configure-wire-hex-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.configure-wire-hex-input {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+  width: 70px;
+  outline: none;
+}
+.configure-wire-reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+.configure-wire-reset-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.configure-wire-reset-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.configure-wire-reset-btn:disabled {
+  opacity: 0.3;
+}
+/* The picker itself reuses .header-dropdown/.header-color-dropdown
+   (and .sv-square-mini/.paint-sliders-mini within it) verbatim for
+   its look - only positioned here relative to its own color row
+   instead of a header button. */
+.configure-color-dropdown {
+  top: calc(100% + 6px);
+  left: 0;
+}
+
+.draw-swatch-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+  /* Constrained narrower than the sidebar's full content width (280px
+     inside its padding) so there's a bit of empty space trailing
+     after the 5th column, rather than the row running flush to the
+     edge. */
+  max-width: 264px;
+}
+.draw-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%; /* fills its grid column - was a fixed 52px, which at 5-per-row plus gaps ran wider than the sidebar actually had room for and forced a 4-then-1 wrap */
+  height: 30px; /* was 32px - at this column width (48px, minus the 1px border on each side = 46px content box) that left the content box's aspect ratio short of the icons' 50x30 viewBox, so wall/texture previews (wallSwatchSvg/textureSwatchSvg) let-terboxed instead of filling - visible as textures not quite reaching the top/bottom edge, and as wall lines rounding slightly off-center. 30px brings the content box (46x28) close enough to the viewBox's 5:3 ratio that both go away. */
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0;
+}
+.draw-swatch:hover { border-color: var(--text-muted); }
+.draw-swatch.active {
+  border-color: var(--accent-active);
+  background: var(--surface-raised);
+}
+.draw-swatch svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.draw-swatch-texture {
+  padding: 0;
+  overflow: hidden;
+}

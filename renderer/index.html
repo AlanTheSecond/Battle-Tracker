@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Battle Tracker</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="app">
+
+    <!-- The battlemap itself - see map.js. GREY feature: always on,
+         standalone or paired, per the GREY/GREEN convention. Always
+         spans the entire app (see style.css - position: absolute,
+         inset: 0), completely outside the sidebar/header's flex
+         layout on purpose: the sidebar collapsing/expanding never
+         touches this element's box at all, so there's nothing for it
+         to redraw or resize in response to - it just sits there,
+         full-bleed, and the sidebar slides over top of or away from
+         it. -->
+    <div class="map-viewport" id="mapViewport">
+      <canvas id="mapCanvas"></canvas>
+      <!-- Generic right-click context menu (see draw-tab.js's
+           mapContextMenu/showMapContextMenu) - Wire mode's item picker
+           is its first use, not something baked into it. Fixed at
+           wherever it was opened; empty/hidden otherwise. -->
+      <div class="map-context-menu" id="mapContextMenu"></div>
+    </div>
+
+    <!-- LEFT SIDEBAR. Wrapped in its own container so the collapse
+         tab (attached to the wrapper, see .side-collapse-tab) can sit
+         at the column's current edge and slide along with it, while
+         the column itself (.side-col) genuinely translates off-screen
+         rather than just being clipped. -->
+    <div class="side-col-wrapper" id="sideColWrapper">
+      <aside class="side-col" id="sideCol">
+
+        <div class="side-fixed-header">
+          <h1 class="app-title">Battle<span>Tracker</span></h1>
+        </div>
+
+        <!-- Planner-style feature tabs. Draw/Spells/Play are GREY
+             (always available, standalone or paired - see the
+             GREY/GREEN convention note in app.js). Spawn is GREEN:
+             it's the creature-creation tool, and per that convention
+             it's the side that gets replaced/enhanced once Initiative
+             Tracker is connected. Marked here via data-feature so the
+             gating logic has something to hook into later - it isn't
+             gated yet. -->
+        <nav class="side-tabs" id="sideTabs">
+          <button class="side-tab-btn active" data-tab="draw" data-feature="grey">Draw</button>
+          <button class="side-tab-btn" data-tab="spawn" data-feature="green">Spawn</button>
+          <button class="side-tab-btn" data-tab="spells" data-feature="grey">Spells</button>
+          <button class="side-tab-btn" data-tab="play" data-feature="grey">Play</button>
+        </nav>
+
+        <!-- Only this middle section scrolls, once there's something
+             in it. Content is per-tab later - blank for every tab
+             right now. -->
+        <div class="side-scroll" id="sideScroll">
+          <!-- intentionally blank -->
+        </div>
+
+        <!-- Fixed - never scrolls, never gets covered by a long list. -->
+        <div class="side-fixed-footer">
+          <button id="menuBtn" class="menu-btn" title="Menu">
+            <span></span><span></span><span></span>
+          </button>
+        </div>
+      </aside>
+
+      <button id="sideCollapseTab" class="side-collapse-tab" title="Collapse"></button>
+    </div>
+
+    <!-- MAIN COLUMN: just the header now - same height as Initiative
+         Tracker's top-bar, reflows with the sidebar via ordinary
+         flexbox same as before. The map used to live in here too, but
+         moved out (see above) so the sidebar animation has nothing to
+         do with it at all anymore. -->
+    <main class="main-col">
+      <header class="main-top-bar">
+        <div class="header-left" id="headerLeft">
+          <!-- Filled per active tool - see draw-tab.js's renderHeaderLeft().
+               Blank when no tool needs it. -->
+        </div>
+        <div class="header-right" id="headerRight">
+          <!-- Reserved for things like a save button, later. -->
+        </div>
+      </header>
+    </main>
+
+  </div>
+
+  <!-- The app menu: Settings only for now, opened from the hamburger
+       button in the sidebar footer - same shell as Initiative
+       Tracker's menu modal, so the two apps feel like a matched pair. -->
+  <div id="menuModal" class="modal-backdrop hidden">
+    <div class="modal-box menu-box">
+      <button id="menuCloseBtn" class="menu-close-btn" title="Close">&times;</button>
+      <div class="menu-layout">
+        <nav class="menu-tabs">
+          <button class="menu-tab-btn active" data-tab="settings">Settings</button>
+          <div class="menu-version">v0.2.0</div>
+        </nav>
+        <div id="menuContent" class="menu-content">
+          <!-- built by app.js based on the selected tab -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="map.js"></script>
+  <script src="draw-tab.js"></script>
+</body>
+</html>

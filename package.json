@@ -1,0 +1,43 @@
+{
+  "name": "battle-tracker",
+  "version": "0.4.0",
+  "description": "Grid-based battlemap companion app for Initiative Tracker",
+  "main": "main.js",
+  "author": "Benjamin Kaschalk",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.dm.battletracker",
+    "productName": "BattleTracker",
+    "asar": true,
+    "electronLanguages": ["en-US"],
+    "win": {
+      "target": "portable"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities",
+      "identity": "-"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "pairing.js",
+      "renderer/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
