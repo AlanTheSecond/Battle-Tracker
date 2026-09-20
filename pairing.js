@@ -23,6 +23,7 @@ let connecting = false;
 let retryTimer = null;
 let sendStatus = () => {}; // wired up by startPairing
 let getVersion = () => '0.0.0';
+let onPeerMessage = () => {}; // wired up by startPairing - anything past hello-ack
 
 function setConnected(value) {
   if (connected === value) return;
@@ -74,7 +75,14 @@ function attemptConnect() {
     if (msg.type === 'hello-ack' && msg.app === EXPECTED_PEER_ID) {
       connecting = false;
       setConnected(true);
+      return;
     }
+    // Everything past the handshake - Initiative Tracker's Bestiary
+    // pushing itself over (bestiary-sync) or reporting that BT should
+    // take focus back (remote-menu-closed). Only meaningful once
+    // actually connected, but a stray message before that shouldn't be
+    // possible given IT only starts sending after its own hello-ack.
+    onPeerMessage(msg);
   });
 
   socket.on('close', () => {
@@ -91,9 +99,10 @@ function attemptConnect() {
   socket.on('error', () => {});
 }
 
-function startPairing(getAppVersion, onStatusChange) {
+function startPairing(getAppVersion, onStatusChange, onMessage) {
   sendStatus = onStatusChange;
   getVersion = getAppVersion;
+  onPeerMessage = onMessage || (() => {});
   attemptConnect();
 }
 
@@ -101,9 +110,15 @@ function getConnectionStatus() {
   return { connected };
 }
 
+// A no-op whenever not actually connected - callers don't need their
+// own "am I paired" guard before using this.
+function sendToPeer(obj) {
+  if (connected && socket) writeMessage(socket, obj);
+}
+
 function stopPairing() {
   if (retryTimer) clearTimeout(retryTimer);
   if (socket) socket.destroy();
 }
 
-module.exports = { startPairing, stopPairing, getConnectionStatus };
+module.exports = { startPairing, stopPairing, getConnectionStatus, sendToPeer };

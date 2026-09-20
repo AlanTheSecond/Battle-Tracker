@@ -218,13 +218,81 @@
   const hideReturnOnRetrigger = new Map();
   const hideSequenceSteps = new Map(); // key -> array of { opacityMode, opacityToValue, opacityByDirection, opacityByValue } - only shown/used while hideSequence is on
   const hideReturnOnLoop = new Map(); // key -> bool; missing/true = on (the default)
+  // Hide's own runtime bookkeeping (as opposed to its Settings - the
+  // maps above). hideToggleApplied: true once a non-sequence Hide's
+  // change is currently in effect on its wired targets - only
+  // meaningful when hideReturnOnRetrigger is on, since that's the only
+  // case where firing again needs to know whether to apply or revert.
+  // logicSequenceStep: the NEXT step index (0-based) a sequence-mode
+  // piece will run on its next firing - shown on the map as a 1-based
+  // badge (see renderOverlay's Logic loop). Shared across Hide/Recolor/
+  // Move the same way logicTriggerModes already is, on the same
+  // reasoning (only one piece type ever occupies a given key).
+  const hideToggleApplied = new Map(); // key -> bool; missing/false = not currently applied
+  const logicSequenceStep = new Map(); // key -> 0-based next-step index; missing = 0
 
   // --- Recolor ---
   const recolorSequence = new Map(); // key -> bool; missing/false = off (the default)
-  const recolorColors = new Map(); // key -> { primary: hex }; missing/no primary = DEFAULT_PRIMARY_COLOR (the default) - the "Set Color" swatch, reusing the same {primary,secondary}-shaped override/picker UI as wall/texture/structure via colorMapFor's 'logic' case (secondary is simply never used - Recolor's spec has only the one color)
+  // key -> { primary: hex, secondary: hex }; missing/no primary or
+  // secondary = DEFAULT_PRIMARY_COLOR/DEFAULT_SECONDARY_COLOR (the
+  // defaults) - the "Set Color" section's two swatches, reusing the
+  // same {primary,secondary}-shaped override/picker UI as wall/texture/
+  // structure via colorMapFor's 'logic' case. Originally single-color
+  // (secondary unused); doubled up per the person's own critical-flaw
+  // callout - "everything operates in two colors, but the recolor tool
+  // only has one" - so a Recolor piece now carries both, each
+  // independently enable-able (see recolorPrimaryEnabled/
+  // recolorSecondaryEnabled below).
+  const recolorColors = new Map();
   const recolorReturnOnRetrigger = new Map(); // key -> bool; missing/true = on (the default)
-  const recolorSequenceSteps = new Map(); // key -> array of { color } - only shown/used while recolorSequence is on
+  // key -> array of { primary, secondary, primaryEnabled, secondaryEnabled } -
+  // only shown/used while recolorSequence is on. Each step carries its
+  // own enabled pair, same as the flat (non-sequence) case below, since
+  // a sequence step is otherwise a fully self-contained snapshot of
+  // "what Set Color looks like on this firing" (see defaultRecolorStep).
+  const recolorSequenceSteps = new Map();
   const recolorReturnOnLoop = new Map(); // key -> bool; missing/true = on (the default)
+  // Whether the flat (non-sequence) "Set Color" section's Primary/
+  // Secondary rows are each currently enabled - missing/true = on (the
+  // default, "filled by default" per spec). A firing only touches a
+  // wired target's color for whichever of these is on (see
+  // applyRecolorStep/fireRecolor) - the checkbox itself enforces "one
+  // must be on at all times" (see wireLogicSettingsControls' handler),
+  // so these two Maps should never actually BOTH read false at once,
+  // but getRecolorColorEnabled still defaults a missing entry to true
+  // defensively rather than assume that invariant holds across a stale
+  // save.
+  const recolorPrimaryEnabled = new Map();
+  const recolorSecondaryEnabled = new Map();
+  // Recolor's own runtime bookkeeping - same role as hideToggleApplied
+  // above, just for Recolor's own retrigger/revert bookkeeping. Unlike
+  // Hide's opacity (which has a real, meaningful "back to normal" value
+  // of 100), a recolored item has no single obvious "original" color to
+  // fall back to if it had already been manually painted before Recolor
+  // ever touched it - reverting here means clearing Recolor's own color
+  // override outright (falling back to whatever wallColors/textureColors/
+  // structureColors would otherwise resolve to, same "reset to default"
+  // meaning the color-picker's own reset button already has), NOT
+  // restoring some remembered prior manual paint color. Flagging this as
+  // the same simplification Hide's own revert-to-100 already makes.
+  const recolorToggleApplied = new Map(); // key -> bool; missing/false = not currently applied
+  // The person explicitly asked for revert to mean "back to whatever
+  // color it actually was before this Recolor touched it" - NOT back to
+  // the type's plain default (the original, simpler implementation's
+  // behavior, which the person rejected outright). This is now real
+  // remembered state, same idea as Move's moveOriginalStates below:
+  // key -> array of { key, category, primary, secondary } snapshots, one
+  // per wired target, capturing each target's own pre-existing color
+  // override (colorMapFor(category).get(key), which may be entirely
+  // missing - meaning "no override, uses the type default" - or may have
+  // only one of primary/secondary set) at the moment JUST BEFORE the
+  // first apply of a retrigger cycle (or a sequence's step-0 firing).
+  // Consumed (then deleted) by revertRecolorTargets. Unlike Move,
+  // Recolor never changes a target's KEY (nothing relocates), so this
+  // restores each snapshotted target directly by its own key/category -
+  // no array-index zipping against a possibly-reshaped wire fan-out is
+  // needed the way Move's revert requires.
+  const recolorOriginalColors = new Map();
 
   // --- Move ---
   const moveSequence = new Map(); // key -> bool; missing/false = off (the default)
@@ -240,6 +308,29 @@
   const moveReturnOnRetrigger = new Map();
   const moveSequenceSteps = new Map(); // key -> array of { action, mode, newPosition, adjust, newRotation, rotateAdjustDirection, rotateAdjustStep } - only shown/used while moveSequence is on
   const moveReturnOnLoop = new Map(); // key -> bool; missing/true = on (the default)
+  // Move's own runtime bookkeeping. Unlike Hide/Recolor, a moved item
+  // genuinely has no meaningful "default" to revert to (there's no such
+  // thing as an item's "normal" position/rotation the way 100% opacity
+  // or an unpainted color is a normal appearance) - reverting Move MUST
+  // mean "put it back exactly where/however it was," which means
+  // actually remembering that, not just clearing an override.
+  // moveToggleApplied: same per-piece bool as hideToggleApplied/
+  // recolorToggleApplied. moveOriginalStates: key -> array of
+  // { key, category, rotation } snapshots, ONE PER WIRED TARGET, in the
+  // same order `wiredTargetsOf(key)` returns them in at the moment the
+  // snapshot was taken - captured right before the first move/rotate of
+  // a retrigger cycle (or a sequence's step-0 firing) and consumed (then
+  // deleted) by revertMoveTargets. Zipped back up by ARRAY INDEX against
+  // whatever wires currently point out of this Move piece, not by key -
+  // a moved target's own key changes (moveItem repoints the wire's toKey
+  // to wherever it lands), so the ORIGINAL key can't be looked back up
+  // directly. This assumes the wire fan-out itself doesn't change shape
+  // between a Move's apply and its own revert (a wire added/removed to
+  // this same Move piece mid-cycle) - revertMoveTargets bails out (drops
+  // the stale snapshot without moving anything) rather than guess if the
+  // counts don't match, since guessing wrong would move the WRONG items.
+  const moveToggleApplied = new Map(); // key -> bool; missing/false = not currently applied
+  const moveOriginalStates = new Map(); // key -> array of { key, category, rotation } | undefined
 
   // Every per-instance Logic-piece setting Map declared above, in one
   // list - used by moveItem's generic carry-across-a-move logic and by
@@ -253,9 +344,9 @@
     switchTriggerModes, switchEveryTurn,
     logicTriggerModes,
     breakWarning,
-    hideSequence, hideOpacityMode, hideOpacityToValue, hideOpacityByDirection, hideOpacityByValue, hideReturnOnRetrigger, hideSequenceSteps, hideReturnOnLoop,
-    recolorSequence, recolorColors, recolorReturnOnRetrigger, recolorSequenceSteps, recolorReturnOnLoop,
-    moveSequence, moveAction, moveMode, moveNewPosition, moveAdjust, moveNewRotation, moveRotateAdjustDirection, moveRotateAdjustStep, moveReturnOnRetrigger, moveSequenceSteps, moveReturnOnLoop,
+    hideSequence, hideOpacityMode, hideOpacityToValue, hideOpacityByDirection, hideOpacityByValue, hideReturnOnRetrigger, hideSequenceSteps, hideReturnOnLoop, hideToggleApplied, logicSequenceStep,
+    recolorSequence, recolorColors, recolorReturnOnRetrigger, recolorSequenceSteps, recolorReturnOnLoop, recolorToggleApplied, recolorPrimaryEnabled, recolorSecondaryEnabled, recolorOriginalColors,
+    moveSequence, moveAction, moveMode, moveNewPosition, moveAdjust, moveNewRotation, moveRotateAdjustDirection, moveRotateAdjustStep, moveReturnOnRetrigger, moveSequenceSteps, moveReturnOnLoop, moveToggleApplied, moveOriginalStates,
   ];
 
   // Every Map the generic .configure-toggle-switch click handler (in
@@ -286,6 +377,28 @@
   // whichever map actually stores that structure - see
   // structureColorKey).
   const structureColors = new Map(); // key -> { primary, secondary }
+  // Creature tokens - same shape as structureColors (outer ring =
+  // primary, inner backing = secondary), keyed by cellKey exactly like
+  // tray.js's own placed-token store (getAt/moveTo/deleteAt all use
+  // this same "col,row" string). Kept here rather than in tray.js
+  // itself for the same reason every other category's paint override
+  // lives in this file: painting is a Draw-tool action, and tray.js
+  // only owns what a token IS (its roster/placement), not how the
+  // Paint tool colors it - see window.BattleDraw.getTokenColors, the
+  // one seam tray.js's own renderTokens reaches through to read this.
+  const tokenColors = new Map(); // key -> { primary, secondary }
+  // A token's custom Label override (Configure tool's Settings
+  // subsection, 'token' branch) - the text drawn on the token in place
+  // of whatever acronym tray.js would otherwise auto-derive from the
+  // creature's name (see tray.js's acronymOf). Same "per-instance
+  // override that outlasts the thing it's overriding, until reset"
+  // shape as tokenColors right above (and structureColors/textureColors
+  // before it) - kept here rather than in tray.js for the same reason:
+  // this is a Configure-tool edit, not part of what a token IS. Missing
+  // entry = no override, i.e. tray.js's own auto-acronym is shown - see
+  // window.BattleDraw.getTokenAcronym, the one seam tray.js's own
+  // renderTokens reaches through to read this (mirrors getTokenColors).
+  const tokenAcronymOverrides = new Map(); // key -> string
 
   // The Paint tool's currently loaded colors - what the next stroke
   // will apply, not any particular instance's color. Defaults match
@@ -420,7 +533,7 @@
   //   deleteMode: 'click' | 'select'
   let placeMode = 'click';
   let deleteMode = 'click'; // 'drag' replaced by 'click' - see syncDragBehavior
-  let paintMode = 'drag'; // matches Paint's original always-continuous behavior by default
+  let paintMode = 'click'; // every other tool starts in its primary/first-listed mode (Place/Delete both default 'click', Select defaults 'arrange', Configure defaults 'edit') - Paint was the one holdout defaulting to its SECOND mode ('drag'), per the person's own complaint; 'drag' was Paint's original always-continuous behavior before Click/Drag modes existed at all, which is presumably how it ended up as the default
   // Arrange (click-and-drag an item to a new location) or Interact
   // (left-click a structure to activate it) - see syncDragBehavior for
   // how this maps to map.js's own dragBehavior, and
@@ -534,6 +647,35 @@
   // it.
   let mapContextMenu = null;
   const mapContextMenuEl = document.getElementById('mapContextMenu');
+  // The most recent { offsetX, offsetY, zoom, cellSize, width, height,
+  // hover } view object handed to renderOverlay - map.js owns the real
+  // pan/zoom state and never exposes a getter for it (draw-tab.js only
+  // ever sees it via that per-frame render callback), so this is just a
+  // cache of "whatever it was as of the last frame," kept specifically
+  // so a Break-warning confirm can compute a screen position for a
+  // popup outside of a render call. GREY plumbing, not persisted, not
+  // touched by undo/redo - purely a positioning convenience.
+  let lastMapView = null;
+  // Break-destroy confirmations queued up when one firing has more than
+  // one wired target with its own warning on - showMapContextMenu is a
+  // singleton popup (one #mapContextMenu element), so simultaneous
+  // confirms aren't possible; they're shown one at a time instead, in
+  // wire order, advancing on either Yes or Cancel. { key, category }
+  // entries, oldest first.
+  let pendingBreakConfirms = [];
+
+  // Hide's actual per-target effect: how visible a given wall/texture/
+  // door/structure currently is, as opacity 0-100. Composite-keyed as
+  // `${category}:${key}` since Hide can target any of those four
+  // categories and their raw keys aren't distinguishable from each
+  // other the way logic/wall/texture/structure keys can overlap in
+  // shape. NOT one of the LOGIC_INSTANCE_MAPS - those all belong to the
+  // Logic piece itself (keyed by the Logic piece's own key); this Map
+  // belongs to the TARGET item instead, so it's cleared/carried at the
+  // target's own placement/deletion/move sites, same pattern as
+  // wallColors/structureColors etc. Missing entry = 100 (fully
+  // visible, the default before any Hide has ever touched that item).
+  const opacityOverrides = new Map(); // "${category}:${key}" -> 0-100
 
   // Which item's color chip currently has its mini-picker open -
   // { category, key, which } - or null. Mirrors colorDropdownOpen's
@@ -553,6 +695,15 @@
   // { category, key, which, source } or null. Mutually exclusive with
   // the picker above (opening one closes the other).
   let configureHexEditing = null;
+  // A creature token's own rename box - { key, source } while the
+  // Configure panel's pencil button next to its name has swapped the
+  // plain-text name for a real input, or null the rest of the time.
+  // Mirrors configureHexEditing's own shape/lifecycle (one editable
+  // field at a time, closed on commit/Escape/blur, reset alongside it
+  // whenever the target changes out from under it) - see
+  // window.CreatureTray.renameToken for what committing it actually
+  // does, which differs for a standalone vs. paired token.
+  let configureTokenNameEditing = null;
   // True while actively dragging the Configure picker's SV square -
   // mirrors colorDragTarget's role for the header's picker.
   let configureColorDragActive = false;
@@ -592,6 +743,20 @@
   // from it (rather than reused) only because it reads/writes
   // logicTriggerModes instead of switchTriggerModes/switchEveryTurn.
   let logicTriggerDropdownOpen = null;
+  // The "Pulse source:" row's own dropdown (only ever shown/openable
+  // when more than one wire feeds this Logic piece - a single source
+  // just shows its name directly, no dropdown needed) - same
+  // { key, source } shape as the two trigger-mode dropdowns above, for
+  // the same sidebar-vs-header-copy reason.
+  let pulseSourceDropdownOpen = null;
+  // Which wire endpoint(s) the "Pulse source:" row is currently asking
+  // the map to highlight - an array of { key, category }, empty when
+  // nothing's being hovered. Hovering the row's own button (closed or
+  // showing a single source) highlights every wired source at once;
+  // hovering one specific item inside the open "Multiple" dropdown
+  // narrows it to just that one. Purely a hover convenience - never
+  // undo-tracked, never persisted, cleared back to [] on mouseleave.
+  let pulseSourceHoverTargets = [];
   // Every OTHER small options-dropdown across Break/Hide/Recolor/Move
   // (Hide's opacity to/by, Move's Move/Rotate and to/by) shares this
   // one generic slot rather than getting its own variable each -
@@ -722,11 +887,18 @@
       hideReturnOnRetrigger: new Map(hideReturnOnRetrigger),
       hideSequenceSteps: new Map(hideSequenceSteps), // safe as a shallow copy - steps arrays/objects are always replaced, never mutated in place (see the Add Step/edit handlers)
       hideReturnOnLoop: new Map(hideReturnOnLoop),
+      hideToggleApplied: new Map(hideToggleApplied),
+      logicSequenceStep: new Map(logicSequenceStep),
+      opacityOverrides: new Map(opacityOverrides),
       recolorSequence: new Map(recolorSequence),
       recolorColors: new Map(recolorColors),
       recolorReturnOnRetrigger: new Map(recolorReturnOnRetrigger),
       recolorSequenceSteps: new Map(recolorSequenceSteps),
       recolorReturnOnLoop: new Map(recolorReturnOnLoop),
+      recolorToggleApplied: new Map(recolorToggleApplied),
+      recolorPrimaryEnabled: new Map(recolorPrimaryEnabled),
+      recolorSecondaryEnabled: new Map(recolorSecondaryEnabled),
+      recolorOriginalColors: new Map(recolorOriginalColors), // safe as a shallow copy - same reasoning as moveOriginalStates: entries are always replaced whole, never mutated in place
       moveSequence: new Map(moveSequence),
       moveAction: new Map(moveAction),
       moveMode: new Map(moveMode),
@@ -738,10 +910,22 @@
       moveReturnOnRetrigger: new Map(moveReturnOnRetrigger),
       moveSequenceSteps: new Map(moveSequenceSteps),
       moveReturnOnLoop: new Map(moveReturnOnLoop),
+      moveToggleApplied: new Map(moveToggleApplied),
+      moveOriginalStates: new Map(moveOriginalStates), // safe as a shallow copy - same reasoning as hideSequenceSteps: entries are always replaced whole, never mutated in place
       wires: wires.map((w) => ({ ...w })),
       wallColors: new Map(wallColors),
       textureColors: new Map(textureColors),
       structureColors: new Map(structureColors),
+      tokenColors: new Map(tokenColors),
+      tokenAcronymOverrides: new Map(tokenAcronymOverrides),
+      // Creature tokens (see tray.js) - folded in here rather than
+      // kept as a separate undo stack of their own, so a step that
+      // touches both a token and, say, a wall in the same gesture
+      // undoes as the one step it actually was. window.CreatureTray
+      // is always defined by the time any of this actually runs (a
+      // user interaction, always well after every script has loaded -
+      // see index.html), but the guard costs nothing.
+      tokens: window.CreatureTray ? window.CreatureTray.snapshot() : [],
     };
   }
   function restoreState(snap) {
@@ -767,11 +951,18 @@
     restoreMap(hideReturnOnRetrigger, snap.hideReturnOnRetrigger);
     restoreMap(hideSequenceSteps, snap.hideSequenceSteps);
     restoreMap(hideReturnOnLoop, snap.hideReturnOnLoop);
+    restoreMap(hideToggleApplied, snap.hideToggleApplied);
+    restoreMap(logicSequenceStep, snap.logicSequenceStep);
+    restoreMap(opacityOverrides, snap.opacityOverrides);
     restoreMap(recolorSequence, snap.recolorSequence);
     restoreMap(recolorColors, snap.recolorColors);
     restoreMap(recolorReturnOnRetrigger, snap.recolorReturnOnRetrigger);
     restoreMap(recolorSequenceSteps, snap.recolorSequenceSteps);
     restoreMap(recolorReturnOnLoop, snap.recolorReturnOnLoop);
+    restoreMap(recolorToggleApplied, snap.recolorToggleApplied);
+    restoreMap(recolorPrimaryEnabled, snap.recolorPrimaryEnabled);
+    restoreMap(recolorSecondaryEnabled, snap.recolorSecondaryEnabled);
+    restoreMap(recolorOriginalColors, snap.recolorOriginalColors);
     restoreMap(moveSequence, snap.moveSequence);
     restoreMap(moveAction, snap.moveAction);
     restoreMap(moveMode, snap.moveMode);
@@ -783,10 +974,15 @@
     restoreMap(moveReturnOnRetrigger, snap.moveReturnOnRetrigger);
     restoreMap(moveSequenceSteps, snap.moveSequenceSteps);
     restoreMap(moveReturnOnLoop, snap.moveReturnOnLoop);
+    restoreMap(moveToggleApplied, snap.moveToggleApplied);
+    restoreMap(moveOriginalStates, snap.moveOriginalStates);
     wires.length = 0; for (const w of snap.wires) wires.push({ ...w });
     wallColors.clear(); for (const [k, v] of snap.wallColors) wallColors.set(k, v);
     textureColors.clear(); for (const [k, v] of snap.textureColors) textureColors.set(k, v);
     structureColors.clear(); for (const [k, v] of snap.structureColors) structureColors.set(k, v);
+    tokenColors.clear(); for (const [k, v] of snap.tokenColors) tokenColors.set(k, v);
+    tokenAcronymOverrides.clear(); for (const [k, v] of snap.tokenAcronymOverrides) tokenAcronymOverrides.set(k, v);
+    if (window.CreatureTray) window.CreatureTray.restore(snap.tokens);
   }
 
   // Cascade for wires - removing any item drops every wire that
@@ -803,6 +999,676 @@
       }
     }
   }
+
+  // ---------------------------------------------------------------
+  // Pulse system - the Wire graph's first real runtime behavior.
+  // Switch and Break are the only two consumers today (Hide/Recolor/
+  // Move still have zero behavior - see deliverPulse). A pulse
+  // travels along every wire whose `from` matches whatever was just
+  // interacted with (a lever/door toggle, or a Logic piece itself
+  // firing) and is delivered to each wire's `to` endpoint.
+  //
+  // `empowered` marks a pulse that specifically came from a Switch
+  // FIRING (not just any pulse reaching a Switch) - per spec, a plain
+  // pulse reaching a door/lever does nothing on its own; only a pulse
+  // that's actually coming out the other side of a Switch can flip
+  // one. This is deliberately generalized to both door and lever
+  // (the app's only two toggleable structure states) rather than
+  // hardcoded to doors alone, since they already share the exact same
+  // on/off mechanic (doorOpenStates/leverOnStates) - flag this
+  // assumption if a lever was meant to stay untouched by this.
+  // ---------------------------------------------------------------
+  function sendPulse(fromKey, fromCategory, empowered) {
+    for (const w of wires) {
+      if (w.fromKey === fromKey && w.fromCategory === fromCategory) {
+        deliverPulse(w.toKey, w.toCategory, empowered);
+      }
+    }
+  }
+
+  function deliverPulse(key, category, empowered) {
+    if (category === 'logic') {
+      const typeId = logic.get(key);
+      if (typeId === 'switch') {
+        if ((switchTriggerModes.get(key) || 'pulse') === 'pulse') fireSwitch(key);
+        return;
+      }
+      if (typeId === 'break') {
+        if ((logicTriggerModes.get(key) || 'pulse') === 'pulse') fireBreak(key);
+        return;
+      }
+      if (typeId === 'hide') {
+        if ((logicTriggerModes.get(key) || 'pulse') === 'pulse') fireHide(key);
+        return;
+      }
+      if (typeId === 'recolor') {
+        if ((logicTriggerModes.get(key) || 'pulse') === 'pulse') fireRecolor(key);
+        return;
+      }
+      if (typeId === 'move') {
+        if ((logicTriggerModes.get(key) || 'pulse') === 'pulse') fireMove(key);
+        return;
+      }
+      return;
+    }
+    if (!empowered) return; // an un-empowered pulse reaching a door/lever directly (no Switch in between) is a no-op, per spec
+    if (doors.has(key)) {
+      doorOpenStates.set(key, !doorOpenStates.get(key));
+      window.BattleMap.requestRedraw();
+    } else if (structures.get(key) === 'lever') {
+      leverOnStates.set(key, !leverOnStates.get(key));
+      window.BattleMap.requestRedraw();
+    }
+  }
+
+  // Switch: receiving a pulse (or a direct click while its own trigger
+  // is Interact mode - see interactLogicPiece) always re-emits an
+  // EMPOWERED pulse to whatever it's wired to. One undo step covers
+  // the whole firing, same "a whole gesture is one undo step"
+  // convention as everything else - the toggle(s) it may cause
+  // downstream happen synchronously inside sendPulse, before this
+  // returns.
+  function fireSwitch(key) {
+    pushUndoSnapshot();
+    sendPulse(key, 'logic', true);
+    renderDrawTab();
+  }
+
+  // Break: receiving a pulse (or a direct Interact click) asks - once
+  // per wired destination, not once for the whole firing - whether to
+  // destroy whatever's on the other end, per that Break instance's own
+  // "Break warning" toggle (breakWarning, default on). Warning off
+  // deletes every destination immediately, batched into one undo step;
+  // warning on queues one confirm per destination (see
+  // pendingBreakConfirms above) since only one can show at a time.
+  function fireBreak(key) {
+    const targets = wires
+      .filter((w) => w.fromKey === key && w.fromCategory === 'logic')
+      .map((w) => ({ key: w.toKey, category: w.toCategory }));
+    if (targets.length === 0) return;
+    if (!getMapOr(breakWarning, key, true)) {
+      pushUndoSnapshot();
+      targets.forEach((t) => deleteItemAt(t.key, t.category));
+      renderDrawTab();
+      return;
+    }
+    const wasEmpty = pendingBreakConfirms.length === 0;
+    pendingBreakConfirms = pendingBreakConfirms.concat(targets);
+    if (wasEmpty) showNextBreakConfirm();
+  }
+
+  // Whether a { key, category } target is still actually there - a
+  // queued confirm can go stale (its object already removed by an
+  // earlier confirm in the same queue, or by anything else) between
+  // being queued and actually being shown.
+  function keyStillExists(key, category) {
+    if (category === 'logic') return logic.has(key);
+    if (category === 'structure') return structures.has(key) || doors.has(key);
+    if (category === 'wall') return walls.has(key);
+    if (category === 'texture') return textures.has(key);
+    return false;
+  }
+
+  // Converts a wire endpoint's world-space anchor (itemScreenCenter)
+  // into actual page coordinates, the same coordinate space
+  // showMapContextMenu expects (it does its own subtraction against
+  // the viewport's own bounding rect) - null if there's no cached view
+  // yet (nothing has been drawn) or the viewport element isn't there.
+  function screenPointForKey(key, category) {
+    if (!lastMapView || !mapContextMenuEl || !mapContextMenuEl.parentElement) return null;
+    const viewportRect = mapContextMenuEl.parentElement.getBoundingClientRect();
+    const p = itemScreenCenter(key, category, lastMapView);
+    return { x: viewportRect.left + p.x, y: viewportRect.top + p.y };
+  }
+
+  // Shows the next queued Break confirm (if any) as a two-option
+  // context menu - reusing showMapContextMenu rather than building a
+  // second popup mechanism, per the existing "generic, reusable"
+  // design of that menu. A disabled first row carries the question
+  // itself, since showMapContextMenu's items are plain buttons with no
+  // separate header slot.
+  function showNextBreakConfirm() {
+    if (pendingBreakConfirms.length === 0) return;
+    const { key, category } = pendingBreakConfirms[0];
+    if (!keyStillExists(key, category)) {
+      pendingBreakConfirms.shift();
+      showNextBreakConfirm();
+      return;
+    }
+    const pt = screenPointForKey(key, category);
+    if (!pt) {
+      pendingBreakConfirms.shift(); // can't position it - skip rather than hang the queue
+      showNextBreakConfirm();
+      return;
+    }
+    showMapContextMenu(pt.x, pt.y, [
+      { label: `Destroy ${wireEndpointLabel(key, category)}?`, disabled: true, onClick: () => {} },
+      {
+        label: 'Yes, destroy', onClick: () => {
+          pushUndoSnapshot();
+          deleteItemAt(key, category);
+          renderDrawTab();
+          pendingBreakConfirms.shift();
+          showNextBreakConfirm();
+        },
+      },
+      {
+        label: 'Cancel', onClick: () => {
+          pendingBreakConfirms.shift();
+          showNextBreakConfirm();
+        },
+      },
+    ]);
+  }
+
+  // Deletes whatever's at (key, category) using the exact same
+  // per-category cleanup the Delete tool's own click handler uses
+  // (color/rotation/open-state Maps, then any wires touching it) -
+  // kept as its own standalone copy rather than refactoring Delete's
+  // already-shipped branch to call it, so this new code path can't
+  // regress an existing, verified one. Does NOT push an undo snapshot
+  // itself - callers batch that at whatever granularity is correct for
+  // them (see fireBreak).
+  function deleteItemAt(key, category) {
+    if (category === 'logic') {
+      logic.delete(key);
+      LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(key));
+      removeWiresReferencing(key, 'logic');
+    } else if (category === 'structure') {
+      if (doors.has(key)) {
+        doors.delete(key);
+        structureColors.delete(key);
+        doorOpenStates.delete(key);
+      } else {
+        structures.delete(key);
+        structureRotations.delete(key);
+        structureColors.delete(key);
+        leverOnStates.delete(key);
+      }
+      clearOpacity(key, 'structure');
+      removeWiresReferencing(key, 'structure');
+    } else if (category === 'wall') {
+      walls.delete(key);
+      wallColors.delete(key);
+      clearOpacity(key, 'wall');
+      removeWiresReferencing(key, 'wall');
+    } else if (category === 'texture') {
+      textures.delete(key);
+      textureColors.delete(key);
+      textureRotations.delete(key);
+      clearOpacity(key, 'texture');
+      removeWiresReferencing(key, 'texture');
+    }
+    window.BattleMap.requestRedraw();
+  }
+
+  // Hide's opacity storage - see opacityOverrides above for why this
+  // is composite-keyed and lives separately from LOGIC_INSTANCE_MAPS.
+  function opacityKey(key, category) {
+    return `${category}:${key}`;
+  }
+  function getOpacity(key, category) {
+    const v = opacityOverrides.get(opacityKey(key, category));
+    return v === undefined ? 100 : v;
+  }
+  function setOpacity(key, category, value) {
+    const clamped = Math.max(0, Math.min(100, value));
+    if (clamped === 100) {
+      opacityOverrides.delete(opacityKey(key, category)); // 100 IS the missing-entry default - no need to store it explicitly
+    } else {
+      opacityOverrides.set(opacityKey(key, category), clamped);
+    }
+    window.BattleMap.requestRedraw();
+  }
+  function clearOpacity(key, category) {
+    opacityOverrides.delete(opacityKey(key, category));
+  }
+  // Computes and applies one Hide step's effect to a single target -
+  // shared between non-sequence firing (a step built fresh from that
+  // Hide's own current Settings) and sequence firing (one of
+  // hideSequenceSteps's stored entries). "to" sets opacity outright;
+  // "by" adjusts the target's CURRENT opacity by the given amount in
+  // the given direction, per target (so two differently-hidden targets
+  // wired to the same "by 50%" Hide end up at different absolute
+  // opacities, which is the only sensible reading of a relative
+  // adjustment applied to items that may already differ).
+  function applyHideStep(targetKey, targetCategory, step) {
+    if (step.opacityMode === 'by') {
+      const current = getOpacity(targetKey, targetCategory);
+      const delta = step.opacityByDirection === '+' ? step.opacityByValue : -step.opacityByValue;
+      setOpacity(targetKey, targetCategory, current + delta);
+    } else {
+      setOpacity(targetKey, targetCategory, step.opacityToValue);
+    }
+  }
+
+  // Hide: receiving a pulse (or a direct Interact click) modifies the
+  // opacity of everything it's wired to, per its own Settings - see the
+  // person's spec: "it will set the opacity/modify the opacity to or by
+  // the specified amount." Sequence mode (a separate list of steps,
+  // each applied to every wired target in turn on successive firings)
+  // takes priority over the simple to/by Settings, which only apply
+  // when sequence is off.
+  //
+  // The loop-reset (hideReturnOnLoop) fires on its OWN separate
+  // triggering - the one that would try to run a step PAST the last
+  // one - rather than being folded into the last real step's own
+  // firing. So for a 3-step sequence: firing 1/2/3 apply steps 1/2/3 in
+  // turn (leaving `logicSequenceStep` sitting at 3, one past the last
+  // valid index); firing 4 is the one that notices there's no step 3
+  // (0-based) to run, resets everything back to normal instead of
+  // applying anything, and rewinds the counter to 0 so firing 5 starts
+  // the sequence over from step 1. Per the person's explicit
+  // correction - the earlier version reverted "for free" as part of
+  // the last step's own firing, which both applied and immediately
+  // undid that step's effect in the same click and then jumped straight
+  // back into step 1 on the very next firing with no reset step ever
+  // visibly happening in between.
+  function fireHide(key) {
+    const targets = wires
+      .filter((w) => w.fromKey === key && w.fromCategory === 'logic')
+      .map((w) => ({ key: w.toKey, category: w.toCategory }));
+    if (targets.length === 0) return;
+    pushUndoSnapshot();
+    if (getMapOr(hideSequence, key, false)) {
+      const steps = hideSequenceSteps.get(key) || [];
+      if (steps.length === 0) { renderDrawTab(); return; }
+      const stepIndex = logicSequenceStep.get(key) || 0;
+      if (stepIndex >= steps.length) {
+        // This firing is the one that would run a step past the last
+        // one - reset instead of applying anything, then rewind so the
+        // NEXT firing starts back at step 1.
+        if (getMapOr(hideReturnOnLoop, key, true)) {
+          targets.forEach((t) => setOpacity(t.key, t.category, 100));
+        }
+        logicSequenceStep.set(key, 0);
+      } else {
+        const step = steps[stepIndex];
+        targets.forEach((t) => applyHideStep(t.key, t.category, step));
+        logicSequenceStep.set(key, stepIndex + 1);
+      }
+    } else {
+      const applied = hideToggleApplied.get(key) || false;
+      const mode = getMapOr(hideOpacityMode, key, 'to');
+      const returnOnRetrigger = getMapOr(hideReturnOnRetrigger, key, mode === 'to');
+      if (returnOnRetrigger && applied) {
+        targets.forEach((t) => setOpacity(t.key, t.category, 100));
+        hideToggleApplied.set(key, false);
+      } else {
+        const step = {
+          opacityMode: mode,
+          opacityToValue: getMapOr(hideOpacityToValue, key, 0),
+          opacityByDirection: getMapOr(hideOpacityByDirection, key, '-'),
+          opacityByValue: getMapOr(hideOpacityByValue, key, 50),
+        };
+        targets.forEach((t) => applyHideStep(t.key, t.category, step));
+        if (returnOnRetrigger) hideToggleApplied.set(key, true);
+      }
+    }
+    renderDrawTab();
+  }
+
+  // Every wire OUT of a Logic piece, resolved to its destination
+  // { key, category } - the shared "who am I wired to" lookup Break/
+  // Hide originally each inlined separately; factored out here since
+  // Recolor and Move (added together, in a later session) both need
+  // the exact same thing and there was no reason for a third copy.
+  function wiredTargetsOf(key) {
+    return wires
+      .filter((w) => w.fromKey === key && w.fromCategory === 'logic')
+      .map((w) => ({ key: w.toKey, category: w.toCategory }));
+  }
+
+  // Whether a given "Set Color" Primary/Secondary row is currently
+  // enabled - the flat (stepIndex -1) case reads recolorPrimaryEnabled/
+  // recolorSecondaryEnabled, a sequence step reads its own copy stored
+  // inline on the step object (see recolorSequenceSteps' own comment).
+  // Missing always defaults to true ("filled by default" per spec).
+  function getRecolorColorEnabled(key, stepIndex, which) {
+    if (stepIndex === -1) {
+      const map = which === 'primary' ? recolorPrimaryEnabled : recolorSecondaryEnabled;
+      return getMapOr(map, key, true);
+    }
+    const step = (recolorSequenceSteps.get(key) || [])[stepIndex];
+    const field = which === 'primary' ? 'primaryEnabled' : 'secondaryEnabled';
+    return step ? step[field] !== false : true;
+  }
+  function setRecolorColorEnabled(key, stepIndex, which, value) {
+    if (stepIndex === -1) {
+      const map = which === 'primary' ? recolorPrimaryEnabled : recolorSecondaryEnabled;
+      map.set(key, value);
+      return;
+    }
+    const steps = (recolorSequenceSteps.get(key) || []).slice();
+    if (!steps[stepIndex]) return;
+    const field = which === 'primary' ? 'primaryEnabled' : 'secondaryEnabled';
+    steps[stepIndex] = { ...steps[stepIndex], [field]: value };
+    recolorSequenceSteps.set(key, steps);
+  }
+
+  // Recolor's own per-target effect: reuses the SAME wallColors/
+  // textureColors/structureColors override maps the Paint tool already
+  // reads/writes (see colorMapFor/setItemColorOverride/
+  // clearItemColorOverride) rather than inventing a parallel store the
+  // way Hide's opacity needed to - a "primary/secondary color override"
+  // is already exactly what those maps represent, and renderOverlay's
+  // draw calls already read them. This does mean a Recolor's effect and
+  // a manual Paint stroke on the same item share one slot - whichever
+  // wrote it last wins.
+  //
+  // `colors` is { primary, secondary, primaryEnabled, secondaryEnabled } -
+  // a disabled category is left untouched entirely (per the person's
+  // own spec: "when applied does not touch the disabled category"), and
+  // secondary is skipped for walls regardless of its enabled flag since
+  // walls have no secondary color concept at all (same hasSecondary
+  // rule the Colors subsection itself already uses).
+  function applyRecolorStep(targetKey, targetCategory, colors) {
+    if (colors.primaryEnabled) setItemColorOverride({ category: targetCategory, key: targetKey }, 'primary', colors.primary);
+    if (colors.secondaryEnabled && targetCategory !== 'wall') setItemColorOverride({ category: targetCategory, key: targetKey }, 'secondary', colors.secondary);
+    window.BattleMap.requestRedraw();
+  }
+
+  // Snapshots every current wired target's OWN pre-existing color
+  // override (whatever colorMapFor(category).get(key) actually holds
+  // right now - which may be nothing at all) right before the first
+  // apply of a retrigger cycle or a sequence's step-0 firing - see
+  // recolorOriginalColors' own declaration comment for why this has to
+  // be a real remembered value rather than a fixed "reset to default",
+  // same reasoning as Move's captureMoveOriginal.
+  function captureRecolorOriginal(key, targets) {
+    recolorOriginalColors.set(key, targets.map((t) => {
+      const existing = colorMapFor(t.category).get(t.key) || {};
+      return { key: t.key, category: t.category, primary: existing.primary, secondary: existing.secondary };
+    }));
+  }
+  // Restores every captured target straight back to its snapshotted
+  // primary/secondary (setting the override if one was recorded,
+  // clearing it outright if the target had none before Recolor ever
+  // touched it), gated by whichever categories THIS colors object
+  // actually has enabled - so a category that was never applied (its
+  // checkbox was off at apply time) is never touched here either.
+  // Restores by the snapshot's OWN key/category directly rather than
+  // re-reading wiredTargetsOf - Recolor never relocates anything, so
+  // the key from the moment of capture is still the right key now,
+  // unlike Move's revert which has to zip against a possibly-reshaped
+  // live wire fan-out.
+  function revertRecolorTargets(key, colors) {
+    const originals = recolorOriginalColors.get(key);
+    if (!originals) return;
+    originals.forEach((orig) => {
+      if (colors.primaryEnabled) {
+        if (orig.primary !== undefined) setItemColorOverride({ category: orig.category, key: orig.key }, 'primary', orig.primary);
+        else clearItemColorOverride({ category: orig.category, key: orig.key }, 'primary');
+      }
+      if (colors.secondaryEnabled && orig.category !== 'wall') {
+        if (orig.secondary !== undefined) setItemColorOverride({ category: orig.category, key: orig.key }, 'secondary', orig.secondary);
+        else clearItemColorOverride({ category: orig.category, key: orig.key }, 'secondary');
+      }
+    });
+    recolorOriginalColors.delete(key);
+    window.BattleMap.requestRedraw();
+  }
+
+  // Recolor: receiving a pulse (or a direct Interact click) sets every
+  // wired target's color to the piece's own "Set Color" section
+  // (recolorColors' primary/secondary, gated by recolorPrimaryEnabled/
+  // recolorSecondaryEnabled), or steps through recolorSequenceSteps,
+  // using the same real capture-then-restore revert mechanism
+  // (captureRecolorOriginal/revertRecolorTargets) rather than Hide's
+  // simpler "reset to a fixed default", per the person's explicit
+  // correction: a recolored item must go back to whatever color it
+  // actually had before, not the type's plain default.
+  //
+  // Same loop-reset timing fix as fireHide/fireMove: the reset is its
+  // own separate firing (the one that would run a step past the last
+  // one), not folded into the last real step's own firing - see
+  // fireHide's own comment for the full explanation. The reset here
+  // always restores BOTH primary and secondary (colors.primaryEnabled/
+  // secondaryEnabled both forced true) regardless of which categories
+  // any individual step happened to have enabled - this is undoing the
+  // sequence's WHOLE cumulative effect, not re-running one step's own
+  // enabled/disabled choice, so a secondary that was set three steps
+  // ago and never touched again still needs to come back on reset.
+  function fireRecolor(key) {
+    const targets = wiredTargetsOf(key);
+    if (targets.length === 0) return;
+    pushUndoSnapshot();
+    if (getMapOr(recolorSequence, key, false)) {
+      const steps = recolorSequenceSteps.get(key) || [];
+      if (steps.length === 0) { renderDrawTab(); return; }
+      const stepIndex = logicSequenceStep.get(key) || 0;
+      if (stepIndex >= steps.length) {
+        if (getMapOr(recolorReturnOnLoop, key, true)) {
+          revertRecolorTargets(key, { primaryEnabled: true, secondaryEnabled: true });
+        } else {
+          recolorOriginalColors.delete(key); // no revert wanted - drop the stale snapshot rather than let it leak indefinitely
+        }
+        logicSequenceStep.set(key, 0);
+      } else {
+        if (stepIndex === 0) captureRecolorOriginal(key, targets);
+        const step = steps[stepIndex];
+        targets.forEach((t) => applyRecolorStep(t.key, t.category, step));
+        logicSequenceStep.set(key, stepIndex + 1);
+      }
+    } else {
+      const applied = recolorToggleApplied.get(key) || false;
+      const returnOnRetrigger = getMapOr(recolorReturnOnRetrigger, key, true);
+      const colors = {
+        primary: (recolorColors.get(key) || {}).primary || DEFAULT_PRIMARY_COLOR,
+        secondary: (recolorColors.get(key) || {}).secondary || DEFAULT_SECONDARY_COLOR,
+        primaryEnabled: getRecolorColorEnabled(key, -1, 'primary'),
+        secondaryEnabled: getRecolorColorEnabled(key, -1, 'secondary'),
+      };
+      if (returnOnRetrigger && applied) {
+        revertRecolorTargets(key, colors);
+        recolorToggleApplied.set(key, false);
+      } else {
+        if (returnOnRetrigger) captureRecolorOriginal(key, targets);
+        targets.forEach((t) => applyRecolorStep(t.key, t.category, colors));
+        if (returnOnRetrigger) recolorToggleApplied.set(key, true);
+      }
+    }
+    renderDrawTab();
+  }
+
+  // Move's per-target rotation storage - dispatches to whichever real
+  // map actually holds a given target's rotation (a door's is the
+  // VALUE half of the `doors` Map itself, not a separate rotation map -
+  // see moveItem's own door branch for the same convention; textures
+  // and non-door structures each get their own dedicated rotation map;
+  // walls have no per-instance rotation concept at all, so they're a
+  // harmless no-op here, same "unused, not wrong" reasoning as
+  // leverOnStates on a non-lever structure elsewhere in this file).
+  function getTargetRotation(key, category) {
+    if (category === 'structure') return doors.has(key) ? (doors.get(key) || 0) : (structureRotations.get(key) || 0);
+    if (category === 'texture') return textureRotations.get(key) || 0;
+    return 0;
+  }
+  function setTargetRotation(key, category, value) {
+    const normalized = ((value % 4) + 4) % 4;
+    if (category === 'structure') {
+      if (doors.has(key)) doors.set(key, normalized); else structureRotations.set(key, normalized);
+    } else if (category === 'texture') {
+      textureRotations.set(key, normalized);
+    }
+    window.BattleMap.requestRedraw();
+  }
+
+  // Computes a Move's destination key for its 'move' action - an edge-
+  // keyed target (wall, door) keeps its own edge TYPE (h/v, an intrinsic
+  // orientation property Move never flips) and gets a new col/row within
+  // that same edge space; a cell-keyed target (texture, non-door
+  // structure) gets a new col/row directly. "to" mode reads newPosition
+  // as the absolute destination; "by" mode adds `adjust` to the
+  // target's CURRENT col/row. newPosition.y/adjust.y is what the
+  // Settings UI now surfaces as its sign-flipped "z" field (see
+  // renderVectorRow) - by the time it reaches here it's already a
+  // plain row value/delta, so this function doesn't need to know about
+  // the flip. .z itself is still accepted (matches the data shape
+  // Settings stores) but never read - there's no Y-axis until 0.7.0,
+  // so this only ever moves within the existing 2D grid. Every result
+  // is rounded to a whole col/row: positions are grid-integer only, and
+  // this is the one place ALL move destinations funnel through, so
+  // rounding here is a last line of defense even though the Settings
+  // UI itself already rounds on entry.
+  function computeMoveDestinationKey(key, category, mode, newPosition, adjust) {
+    const isEdge = key.indexOf(':') !== -1;
+    if (isEdge) {
+      const edge = parseWallKey(key);
+      const col = Math.round(mode === 'to' ? newPosition.x : edge.col + adjust.x);
+      const row = Math.round(mode === 'to' ? newPosition.y : edge.row + adjust.y);
+      return wallKey({ type: edge.type, col, row });
+    }
+    const [col, row] = key.split(',').map(Number);
+    const newCol = Math.round(mode === 'to' ? newPosition.x : col + adjust.x);
+    const newRow = Math.round(mode === 'to' ? newPosition.y : row + adjust.y);
+    return cellKey(newCol, newRow);
+  }
+
+  // Applies one Move step to a single target, returning whatever key it
+  // ends up at (unchanged for a 'rotate' step, or for a 'move' step that
+  // resolves to the same spot it's already at). Reuses moveItem itself
+  // (the exact same relocation Arrange-mode drags use) for the actual
+  // relocation, rather than a parallel copy - gets its full per-category
+  // color/rotation/open-state/opacity carry-and-clear-destination-first
+  // behavior, and its wire-repointing (updateWireReferences), for free.
+  function applyMoveStep(targetKey, targetCategory, step) {
+    if (step.action === 'rotate') {
+      const current = getTargetRotation(targetKey, targetCategory);
+      const delta = step.rotateAdjustDirection === '+' ? step.rotateAdjustStep : -step.rotateAdjustStep;
+      const newRotation = step.mode === 'to' ? step.newRotation : current + delta;
+      setTargetRotation(targetKey, targetCategory, newRotation);
+      return targetKey;
+    }
+    const newKey = computeMoveDestinationKey(targetKey, targetCategory, step.mode, step.newPosition, step.adjust);
+    if (newKey === targetKey) return targetKey;
+    moveItem({ category: targetCategory, key: targetKey, typeId: doors.has(targetKey) ? 'door' : undefined }, newKey);
+    return newKey;
+  }
+
+  // Snapshots every current target of a Move piece (key/category/
+  // rotation) right before its first move/rotate of a retrigger or
+  // sequence cycle - see moveOriginalStates' own declaration comment for
+  // why this has to be a real remembered value rather than a fixed
+  // default the way Hide/Recolor's revert gets to be.
+  function captureMoveOriginal(key, targets) {
+    moveOriginalStates.set(key, targets.map((t) => ({ key: t.key, category: t.category, rotation: getTargetRotation(t.key, t.category) })));
+  }
+  // Moves every CURRENT target of this Move piece back to its captured
+  // original key/rotation, zipped by array index against the snapshot
+  // (see moveOriginalStates' comment on why index, not key) - bails out
+  // without moving anything if the current wire fan-out doesn't match
+  // the snapshot's own count, rather than risk relocating the wrong
+  // item to the wrong place.
+  function revertMoveTargets(key) {
+    const originals = moveOriginalStates.get(key);
+    if (!originals) return;
+    const current = wiredTargetsOf(key);
+    if (current.length === originals.length) {
+      current.forEach((t, i) => {
+        const orig = originals[i];
+        if (t.key !== orig.key) {
+          moveItem({ category: t.category, key: t.key, typeId: doors.has(t.key) ? 'door' : undefined }, orig.key);
+        }
+        setTargetRotation(orig.key, orig.category, orig.rotation);
+      });
+    }
+    moveOriginalStates.delete(key);
+  }
+
+  // Move: receiving a pulse (or a direct Interact click) relocates
+  // and/or rotates every wired target per the piece's own Settings, or
+  // steps through moveSequenceSteps - identical shape to fireHide/
+  // fireRecolor above, with the one real difference being that "revert"
+  // needs an actual remembered original state (see moveOriginalStates)
+  // rather than a fixed default, since a moved item has no such thing.
+  //
+  // Same loop-reset timing fix as fireHide/fireRecolor: the reset is
+  // its own separate firing (the one that would run a step past the
+  // last one), not folded into the last real step's own firing - see
+  // fireHide's own comment for the full explanation.
+  function fireMove(key) {
+    const targets = wiredTargetsOf(key);
+    if (targets.length === 0) return;
+    pushUndoSnapshot();
+    if (getMapOr(moveSequence, key, false)) {
+      const steps = moveSequenceSteps.get(key) || [];
+      if (steps.length === 0) { renderDrawTab(); return; }
+      const stepIndex = logicSequenceStep.get(key) || 0;
+      if (stepIndex >= steps.length) {
+        if (getMapOr(moveReturnOnLoop, key, true)) revertMoveTargets(key);
+        else moveOriginalStates.delete(key); // no revert wanted - drop the stale snapshot rather than let it leak indefinitely
+        logicSequenceStep.set(key, 0);
+      } else {
+        if (stepIndex === 0) captureMoveOriginal(key, targets);
+        const step = steps[stepIndex];
+        targets.forEach((t) => applyMoveStep(t.key, t.category, step));
+        logicSequenceStep.set(key, stepIndex + 1);
+      }
+    } else {
+      const applied = moveToggleApplied.get(key) || false;
+      const mode = getMapOr(moveMode, key, 'to');
+      const returnOnRetrigger = getMapOr(moveReturnOnRetrigger, key, mode === 'to');
+      if (returnOnRetrigger && applied) {
+        revertMoveTargets(key);
+        moveToggleApplied.set(key, false);
+      } else {
+        if (returnOnRetrigger) captureMoveOriginal(key, targets);
+        const step = {
+          action: getMapOr(moveAction, key, 'move'),
+          mode,
+          newPosition: getMapOr(moveNewPosition, key, { x: 0, y: 0, z: 0 }),
+          adjust: getMapOr(moveAdjust, key, { x: 0, y: 0, z: 0 }),
+          newRotation: getMapOr(moveNewRotation, key, 0),
+          rotateAdjustDirection: getMapOr(moveRotateAdjustDirection, key, '+'),
+          rotateAdjustStep: getMapOr(moveRotateAdjustStep, key, 0),
+        };
+        targets.forEach((t) => applyMoveStep(t.key, t.category, step));
+        if (returnOnRetrigger) moveToggleApplied.set(key, true);
+      }
+    }
+    renderDrawTab();
+  }
+
+  // A direct click on a Logic piece's OWN location, while Select's
+  // Interact mode is active - only fires it if that specific piece's
+  // own trigger mode is 'interact'; a Pulse-mode piece is inert to
+  // being clicked directly, same as it always was (clicking it today
+  // does literally nothing, per the primer's "no runtime behavior
+  // yet" - this only changes that for the two trigger modes that can
+  // mean something without IT/creature/turn data). Returns whether it
+  // actually did anything, so the caller knows whether to treat the
+  // click as handled.
+  function interactLogicPiece(key) {
+    const typeId = logic.get(key);
+    if (typeId === 'switch') {
+      if ((switchTriggerModes.get(key) || 'pulse') !== 'interact') return false;
+      fireSwitch(key);
+      return true;
+    }
+    if (typeId === 'break') {
+      if ((logicTriggerModes.get(key) || 'pulse') !== 'interact') return false;
+      fireBreak(key);
+      return true;
+    }
+    if (typeId === 'hide') {
+      if ((logicTriggerModes.get(key) || 'pulse') !== 'interact') return false;
+      fireHide(key);
+      return true;
+    }
+    if (typeId === 'recolor') {
+      if ((logicTriggerModes.get(key) || 'pulse') !== 'interact') return false;
+      fireRecolor(key);
+      return true;
+    }
+    if (typeId === 'move') {
+      if ((logicTriggerModes.get(key) || 'pulse') !== 'interact') return false;
+      fireMove(key);
+      return true;
+    }
+    return false;
+  }
+
   // Toggles the existing buttons' disabled state directly rather than
   // going through a full renderHeaderLeft() - pushUndoSnapshot() (and
   // therefore this) fires on every single placement/deletion, so a
@@ -911,6 +1777,17 @@
     if (logic.has(cKey) && isNearCellCenter(info, LOGIC_HIT_RADIUS_FRACTION)) {
       return { category: 'logic', key: cKey, typeId: logic.get(cKey) };
     }
+    // Creature tokens (see tray.js) - checked between Logic and
+    // Structure, matching the layer they're drawn on (structures ->
+    // CREATURES -> logic, see renderOverlay): a piece of Logic sitting
+    // on the same tile still wins the grab (it's drawn on top), but a
+    // creature standing over a structure is the thing the DM most
+    // likely means to grab there, ahead of whatever's built into the
+    // tile underneath it. Same "outermost/largest, no radius check"
+    // treatment as texture below.
+    if (window.CreatureTray && window.CreatureTray.getAt(cKey)) {
+      return { category: 'token', key: cKey, typeId: null };
+    }
     if (structures.has(cKey) && isNearCellCenter(info, STRUCTURE_HIT_RADIUS_FRACTION)) {
       return { category: 'structure', key: cKey, typeId: structures.get(cKey) };
     }
@@ -965,41 +1842,49 @@
     if (item.category === 'wall') {
       const typeId = walls.get(oldKey);
       const color = wallColors.get(oldKey);
-      walls.delete(oldKey); wallColors.delete(oldKey);
-      doors.delete(newKey); structureColors.delete(newKey); doorOpenStates.delete(newKey);
-      wallColors.delete(newKey); // clears the DESTINATION's own stale color - otherwise a moved wall with no override of its own would silently inherit whatever was already sitting there
+      const opacity = opacityOverrides.get(opacityKey(oldKey, 'wall'));
+      walls.delete(oldKey); wallColors.delete(oldKey); clearOpacity(oldKey, 'wall');
+      doors.delete(newKey); structureColors.delete(newKey); doorOpenStates.delete(newKey); clearOpacity(newKey, 'structure');
+      wallColors.delete(newKey); clearOpacity(newKey, 'wall'); // clears the DESTINATION's own stale color/opacity - otherwise a moved wall with no override of its own would silently inherit whatever was already sitting there
       walls.set(newKey, typeId);
       if (color) wallColors.set(newKey, color);
+      if (opacity !== undefined) opacityOverrides.set(opacityKey(newKey, 'wall'), opacity);
     } else if (item.typeId === 'door') {
       const rotation = doors.get(oldKey);
       const color = structureColors.get(oldKey);
       const isOpen = doorOpenStates.get(oldKey);
-      doors.delete(oldKey); structureColors.delete(oldKey); doorOpenStates.delete(oldKey);
-      walls.delete(newKey); wallColors.delete(newKey);
-      structureColors.delete(newKey); doorOpenStates.delete(newKey); // clears the DESTINATION door's own stale color/open-state
+      const opacity = opacityOverrides.get(opacityKey(oldKey, 'structure'));
+      doors.delete(oldKey); structureColors.delete(oldKey); doorOpenStates.delete(oldKey); clearOpacity(oldKey, 'structure');
+      walls.delete(newKey); wallColors.delete(newKey); clearOpacity(newKey, 'wall');
+      structureColors.delete(newKey); doorOpenStates.delete(newKey); clearOpacity(newKey, 'structure'); // clears the DESTINATION door's own stale color/open-state/opacity
       doors.set(newKey, rotation);
       if (color) structureColors.set(newKey, color);
       if (isOpen) doorOpenStates.set(newKey, isOpen);
+      if (opacity !== undefined) opacityOverrides.set(opacityKey(newKey, 'structure'), opacity);
     } else if (item.category === 'structure') {
       const typeId = structures.get(oldKey);
       const rotation = structureRotations.get(oldKey);
       const color = structureColors.get(oldKey);
       const isOn = leverOnStates.get(oldKey);
-      structures.delete(oldKey); structureRotations.delete(oldKey); structureColors.delete(oldKey); leverOnStates.delete(oldKey);
-      structureRotations.delete(newKey); structureColors.delete(newKey); leverOnStates.delete(newKey); // clears the DESTINATION structure's own stale rotation/color/on-state
+      const opacity = opacityOverrides.get(opacityKey(oldKey, 'structure'));
+      structures.delete(oldKey); structureRotations.delete(oldKey); structureColors.delete(oldKey); leverOnStates.delete(oldKey); clearOpacity(oldKey, 'structure');
+      structureRotations.delete(newKey); structureColors.delete(newKey); leverOnStates.delete(newKey); clearOpacity(newKey, 'structure'); // clears the DESTINATION structure's own stale rotation/color/on-state/opacity
       structures.set(newKey, typeId);
       if (rotation) structureRotations.set(newKey, rotation);
       if (color) structureColors.set(newKey, color);
       if (isOn) leverOnStates.set(newKey, isOn);
+      if (opacity !== undefined) opacityOverrides.set(opacityKey(newKey, 'structure'), opacity);
     } else if (item.category === 'texture') {
       const typeId = textures.get(oldKey);
       const color = textureColors.get(oldKey);
       const rotation = textureRotations.get(oldKey);
-      textures.delete(oldKey); textureColors.delete(oldKey); textureRotations.delete(oldKey);
-      textureColors.delete(newKey); textureRotations.delete(newKey); // clears the DESTINATION texture's own stale color/rotation
+      const opacity = opacityOverrides.get(opacityKey(oldKey, 'texture'));
+      textures.delete(oldKey); textureColors.delete(oldKey); textureRotations.delete(oldKey); clearOpacity(oldKey, 'texture');
+      textureColors.delete(newKey); textureRotations.delete(newKey); clearOpacity(newKey, 'texture'); // clears the DESTINATION texture's own stale color/rotation/opacity
       textures.set(newKey, typeId);
       if (color) textureColors.set(newKey, color);
       if (rotation) textureRotations.set(newKey, rotation);
+      if (opacity !== undefined) opacityOverrides.set(opacityKey(newKey, 'texture'), opacity);
     } else if (item.category === 'logic') {
       const typeId = logic.get(oldKey);
       // Every per-instance Logic setting a piece could have, across all
@@ -1015,6 +1900,28 @@
       LOGIC_INSTANCE_MAPS.forEach((map) => map.delete(newKey)); // clears the DESTINATION's own stale settings
       logic.set(newKey, typeId);
       LOGIC_INSTANCE_MAPS.forEach((map, i) => { if (carried[i] !== undefined) map.set(newKey, carried[i]); });
+    } else if (item.category === 'token') {
+      // Delegates to tray.js's own store - see window.CreatureTray.
+      // moveTo (refuses rather than replaces if newKey is already
+      // occupied by a different token). tokenColors lives here rather
+      // than in tray.js (see its own declaration comment), so this is
+      // the one part of a token's move this file still has to do
+      // itself - same carry-the-paint-override-across-a-move pattern
+      // every other category's own branch above already follows.
+      if (!window.CreatureTray) return;
+      const before = window.CreatureTray.getAt(oldKey);
+      if (!before) return; // moveTo would no-op too - nothing to carry
+      window.CreatureTray.moveTo(oldKey, newKey);
+      const stillAtOld = window.CreatureTray.getAt(oldKey);
+      if (stillAtOld === before) return; // move was refused (newKey already occupied) - leave tokenColors alone
+      const color = tokenColors.get(oldKey);
+      tokenColors.delete(oldKey);
+      tokenColors.delete(newKey); // clears the DESTINATION token's own stale color, if it had one from some earlier occupant
+      if (color) tokenColors.set(newKey, color);
+      const label = tokenAcronymOverrides.get(oldKey);
+      tokenAcronymOverrides.delete(oldKey);
+      tokenAcronymOverrides.delete(newKey); // clears the DESTINATION token's own stale label override, same reasoning as the color clear just above
+      if (label) tokenAcronymOverrides.set(newKey, label);
     }
     updateWireReferences(oldKey, item.category, newKey, item.category);
   }
@@ -1161,30 +2068,38 @@
       // map's own 'arrange' drag gesture instead (see
       // handleArrangeGesture), which fires on genuine drags, not the
       // plain clicks this function handles. Interact activates
-      // whatever structure (door included, since it's a structure
-      // type living on an edge) is at the click - same edge-first,
-      // then within-radius-of-cell-center priority Paint/Delete/
-      // Arrange all already use, so a click doesn't accidentally
-      // activate a structure two cells away just because reaching it
-      // by scanning the cell without a radius would resolve there.
-      // Only lever and door have any effect yet - "we'll get to what
-      // [other] structures do soon" is still true here.
+      // whatever's at the click - reuses findGrabbableAt (Arrange
+      // mode's own "what's topmost here" resolver) rather than a
+      // second copy of the same edge-first/logic-then-structure-then-
+      // texture priority order, so the two can never drift apart.
+      // Every wireable thing can send a pulse on Interact-click - wall,
+      // texture, any structure (chest/sack/stairs included, not just
+      // lever/door), and a creature token too - per the person's
+      // explicit correction: "literally everything should be able to
+      // send a pulse when interacted with... Right now you have it set
+      // to just be levers." Only door/lever additionally flip their
+      // own visible on/off state as part of the same click - everything
+      // else, tokens included, has no such state of its own, it just
+      // sends the pulse. This needed no token-specific branch at all:
+      // found.category is just 'token' here like any other category,
+      // and sendPulse/the wire graph were already fully generic over
+      // category - the only reason a token couldn't do this already
+      // was that it had no way to actually be wired to anything (see
+      // itemsAtTarget/renderWireItemRow, now fixed).
       if (selectMode !== 'interact') return;
-      const eKey = info.edge ? wallKey(info.edge) : null;
-      if (eKey && doors.has(eKey)) {
-        if (info.isGestureStart) pushUndoSnapshot();
-        doorOpenStates.set(eKey, !doorOpenStates.get(eKey));
-        window.BattleMap.requestRedraw();
+      const found = findGrabbableAt(info);
+      if (!found) return;
+      if (found.category === 'logic') {
+        interactLogicPiece(found.key);
         return;
       }
-      const cKey = cellKey(info.col, info.row);
-      if (structures.has(cKey) && isNearCellCenter(info, STRUCTURE_HIT_RADIUS_FRACTION)) {
-        if (structures.get(cKey) === 'lever') {
-          if (info.isGestureStart) pushUndoSnapshot();
-          leverOnStates.set(cKey, !leverOnStates.get(cKey));
-          window.BattleMap.requestRedraw();
-        }
-      }
+      const isDoor = found.typeId === 'door';
+      const isLever = found.typeId === 'lever';
+      if ((isDoor || isLever) && info.isGestureStart) pushUndoSnapshot();
+      if (isDoor) doorOpenStates.set(found.key, !doorOpenStates.get(found.key));
+      else if (isLever) leverOnStates.set(found.key, !leverOnStates.get(found.key));
+      sendPulse(found.key, found.category, false); // un-empowered - reaches a wired Switch/Break/etc; a direct pulse into another door/lever with nothing in between is a no-op per spec (see deliverPulse)
+      window.BattleMap.requestRedraw();
       return;
     }
     if (activeTool === 'configure') {
@@ -1250,6 +2165,19 @@
       // (Configure can recolor them) but Paint never wrote to it -
       // structureColors was only ever read here, never set.
       const cKey = cellKey(info.col, info.row);
+      // Creature tokens - checked ahead of structures, matching the
+      // layer order a token actually draws in (renderOverlay puts it
+      // above a structure, below Logic) and findGrabbableAt's own
+      // priority. No radius gate, same "outermost/largest" treatment
+      // findGrabbableAt already gives it - a token fills its whole
+      // cell the way a texture does, unlike a structure's smaller
+      // footprint.
+      if (window.CreatureTray && window.CreatureTray.getAt(cKey)) {
+        if (info.isGestureStart) pushUndoSnapshot();
+        tokenColors.set(cKey, { primary: paintPrimaryColor, secondary: paintSecondaryColor });
+        window.BattleMap.requestRedraw();
+        return;
+      }
       if (structures.has(cKey) && isNearCellCenter(info, STRUCTURE_HIT_RADIUS_FRACTION)) {
         if (info.isGestureStart) pushUndoSnapshot();
         structureColors.set(cKey, { primary: paintPrimaryColor, secondary: paintSecondaryColor });
@@ -1288,6 +2216,7 @@
         doors.delete(wKey);
         structureColors.delete(wKey);
         doorOpenStates.delete(wKey);
+        clearOpacity(wKey, 'structure');
         removeWiresReferencing(wKey, 'structure');
         window.BattleMap.requestRedraw();
         return;
@@ -1296,6 +2225,7 @@
         if (info.isGestureStart) pushUndoSnapshot();
         walls.delete(wKey);
         wallColors.delete(wKey);
+        clearOpacity(wKey, 'wall');
         removeWiresReferencing(wKey, 'wall');
         window.BattleMap.requestRedraw();
         return;
@@ -1309,12 +2239,24 @@
         window.BattleMap.requestRedraw();
         return;
       }
+      // Creature tokens - same priority as findGrabbableAt gives them
+      // (between Logic and Structure).
+      if (window.CreatureTray && window.CreatureTray.getAt(cKey)) {
+        if (info.isGestureStart) pushUndoSnapshot();
+        window.CreatureTray.deleteAt(cKey);
+        tokenColors.delete(cKey);
+        tokenAcronymOverrides.delete(cKey);
+        removeWiresReferencing(cKey, 'token');
+        window.BattleMap.requestRedraw();
+        return;
+      }
       if (structures.has(cKey)) {
         if (info.isGestureStart) pushUndoSnapshot();
         structures.delete(cKey);
         structureRotations.delete(cKey);
         structureColors.delete(cKey);
         leverOnStates.delete(cKey);
+        clearOpacity(cKey, 'structure');
         removeWiresReferencing(cKey, 'structure');
         window.BattleMap.requestRedraw();
         return;
@@ -1324,6 +2266,7 @@
         textures.delete(cKey);
         textureColors.delete(cKey);
         textureRotations.delete(cKey);
+        clearOpacity(cKey, 'texture');
         removeWiresReferencing(cKey, 'texture');
         window.BattleMap.requestRedraw();
       }
@@ -1338,12 +2281,14 @@
       const eKey = wallKey(info.edge);
       walls.set(eKey, selected.id);
       wallColors.delete(eKey); // a newly placed item always starts at default colors, never inheriting whatever used to be here
+      clearOpacity(eKey, 'wall');
     } else if (selected.category === 'texture') {
       if (info.isGestureStart) pushUndoSnapshot();
       const cKey = cellKey(info.col, info.row);
       textures.set(cKey, selected.id);
       textureColors.delete(cKey);
       textureRotations.set(cKey, placeRotation);
+      clearOpacity(cKey, 'texture');
     } else if (selected.category === 'logic') {
       // The one category that can land on either target - edge wins
       // when the click is close enough to one (same convention as
@@ -1364,9 +2309,11 @@
         const eKey = wallKey(info.edge);
         walls.delete(eKey);
         wallColors.delete(eKey);
+        clearOpacity(eKey, 'wall');
         doors.set(eKey, placeRotation);
         structureColors.delete(eKey);
         doorOpenStates.delete(eKey); // a newly placed door always starts closed
+        clearOpacity(eKey, 'structure');
       } else {
         if (info.isGestureStart) pushUndoSnapshot();
         const cKey = cellKey(info.col, info.row);
@@ -1374,6 +2321,7 @@
         structureRotations.set(cKey, placeRotation);
         structureColors.delete(cKey);
         leverOnStates.delete(cKey); // a newly placed lever always starts off (harmless no-op for other types)
+        clearOpacity(cKey, 'structure');
       }
     }
     window.BattleMap.requestRedraw();
@@ -1405,6 +2353,7 @@
       const startKey = wallKey(startInfo.edge);
       walls.set(startKey, lineWallTypeId);
       wallColors.delete(startKey);
+      clearOpacity(startKey, 'wall');
       linePreviewEdges = [];
       window.BattleMap.requestRedraw();
       return;
@@ -1433,6 +2382,7 @@
       const eKey = wallKey(edge);
       walls.set(eKey, lineWallTypeId);
       wallColors.delete(eKey);
+      clearOpacity(eKey, 'wall');
     }
     linePreviewEdges = [];
     lineEngaged = false;
@@ -1483,6 +2433,7 @@
       if (edge.col >= minCol && edge.col <= colMax && edge.row >= minRow && edge.row <= rowMax) {
         walls.delete(key);
         wallColors.delete(key);
+        clearOpacity(key, 'wall');
         removeWiresReferencing(key, 'wall');
       }
     }
@@ -1494,6 +2445,7 @@
         doors.delete(key);
         structureColors.delete(key);
         doorOpenStates.delete(key);
+        clearOpacity(key, 'structure');
         removeWiresReferencing(key, 'structure');
       }
     }
@@ -1503,6 +2455,7 @@
         textures.delete(key);
         textureColors.delete(key);
         textureRotations.delete(key);
+        clearOpacity(key, 'texture');
         removeWiresReferencing(key, 'texture');
       }
     }
@@ -1513,7 +2466,19 @@
         structureRotations.delete(key);
         structureColors.delete(key);
         leverOnStates.delete(key);
+        clearOpacity(key, 'structure');
         removeWiresReferencing(key, 'structure');
+      }
+    }
+    if (window.CreatureTray) {
+      for (const key of window.CreatureTray.placedKeys()) {
+        const [c, r] = key.split(',').map(Number);
+        if (c >= minCol && c <= maxCol && r >= minRow && r <= maxRow) {
+          window.CreatureTray.deleteAt(key);
+          tokenColors.delete(key);
+          tokenAcronymOverrides.delete(key);
+          removeWiresReferencing(key, 'token');
+        }
       }
     }
     // Logic - mixed key shapes (edge or cell, see the `logic` Map's
@@ -2197,18 +3162,19 @@
   // cursor while Delete is active - every frame.
   // ---------------------------------------------------------------
   function renderOverlay(ctx, view) {
+    lastMapView = view; // see the declaration above - cached purely so a Break confirm can position itself outside of a render call
     for (const [key, typeId] of walls) {
       const type = findType('wall', typeId);
       if (!type) continue; // a saved wall of a type that's since been removed - skip rather than throw
       const paint = wallColors.get(key);
-      drawWallSegment(ctx, parseWallKey(key), type, view, 1, paint && paint.primary);
+      drawWallSegment(ctx, parseWallKey(key), type, view, getOpacity(key, 'wall') / 100, paint && paint.primary);
     }
     for (const [key, typeId] of textures) {
       const type = findType('texture', typeId);
       if (!type) continue;
       const [col, row] = key.split(',').map(Number);
       const paint = textureColors.get(key);
-      drawTexture(ctx, cellRect(col, row, view), type, textureRotations.get(key) || 0, view, 1, paint && paint.primary, paint && paint.secondary);
+      drawTexture(ctx, cellRect(col, row, view), type, textureRotations.get(key) || 0, view, getOpacity(key, 'texture') / 100, paint && paint.primary, paint && paint.secondary);
     }
     // Doors are a structure type (selected from Structures, share
     // structureRotation/the R hotkey/etc.) and should sit above
@@ -2220,7 +3186,7 @@
       const { x1, y1, x2, y2, cell } = edgePixels(parseWallKey(key), view);
       const paint = structureColors.get(key);
       const isOpen = !!doorOpenStates.get(key);
-      drawDoorIcon(ctx, x1, y1, x2, y2, cell, rotation, 1, false, paint, isOpen);
+      drawDoorIcon(ctx, x1, y1, x2, y2, cell, rotation, getOpacity(key, 'structure') / 100, false, paint, isOpen);
     }
     for (const [key, typeId] of structures) {
       const type = findType('structure', typeId);
@@ -2229,7 +3195,17 @@
       const rotation = structureRotations.get(key) || 0;
       const paint = structureColors.get(key);
       const isOn = leverOnStates.get(key) || false;
-      drawStructure(ctx, cellRect(col, row, view), type, rotation, view, 1, paint, isOn);
+      drawStructure(ctx, cellRect(col, row, view), type, rotation, view, getOpacity(key, 'structure') / 100, paint, isOn);
+    }
+
+    // Creature tokens (see tray.js) - drawn between Structures and
+    // Logic: above anything built into the tile, but still underneath
+    // any Logic piece placed over the same cell. tray.js owns the
+    // actual token store and drawing code; this just calls it at the
+    // right point in this file's own layer order rather than letting
+    // it register a separately-timed overlay renderer of its own.
+    if (window.CreatureTray && window.CreatureTray.renderTokens) {
+      window.CreatureTray.renderTokens(ctx, view);
     }
 
     // Logic - drawn last of the four placed-content layers so it
@@ -2241,13 +3217,21 @@
     // should fill the cell the way textures/structures do.
     for (const [key, typeId] of logic) {
       const isEdge = key.indexOf(':') !== -1;
+      let cx, cy, refSize;
       if (isEdge) {
         const { x1, y1, x2, y2, cell } = edgePixels(parseWallKey(key), view);
-        drawLogicIcon(ctx, (x1 + x2) / 2, (y1 + y2) / 2, cell * 0.55, typeId);
+        cx = (x1 + x2) / 2; cy = (y1 + y2) / 2; refSize = cell * 0.55;
       } else {
         const [col, row] = key.split(',').map(Number);
         const r = cellRect(col, row, view);
-        drawLogicIcon(ctx, r.x + r.size / 2, r.y + r.size / 2, r.size * 0.55, typeId);
+        cx = r.x + r.size / 2; cy = r.y + r.size / 2; refSize = r.size * 0.55;
+      }
+      drawLogicIcon(ctx, cx, cy, refSize, typeId);
+      if (pieceSequenceOn(key, typeId)) {
+        const stepIndex = logicSequenceStep.get(key) || 0;
+        const steps = sequenceStepsFor(key, typeId);
+        const label = steps.length > 0 && stepIndex >= steps.length ? '↺' : stepIndex + 1;
+        drawLogicSequenceBadge(ctx, cx, cy, refSize, label);
       }
     }
 
@@ -2352,6 +3336,44 @@
           ? { edge: arrangeDragCurrentInfo.edge }
           : { col: arrangeDragCurrentInfo.col, row: arrangeDragCurrentInfo.row };
         drawArrangeHighlight(dropTarget, 0.75);
+      }
+    }
+
+    // Pulse source hover - the Settings panel's "Pulse source:" row
+    // (renderPulseSourceRow) asks for this via pulseSourceHoverTargets
+    // whenever the row's button (all wired sources) or one specific
+    // item in its "Multiple" dropdown (just that one) is being hovered.
+    // Amber rather than Configure's blue/Arrange's green/Delete's red -
+    // a fourth, distinct meaning ("this is what feeds that piece"), not
+    // a selection or a pending action. Drawn in Edit mode too (not just
+    // Wire mode, unlike the wire lines below) since that's where the
+    // Settings panel itself lives.
+    if (activeTool === 'configure' && pulseSourceHoverTargets.length > 0) {
+      const drawPulseSourceHighlight = (target) => {
+        ctx.save();
+        ctx.fillStyle = '#d98c1f';
+        ctx.strokeStyle = '#d98c1f';
+        if (target.edge) {
+          const { x1, y1, x2, y2, cell } = edgePixels(target.edge, view);
+          ctx.globalAlpha = 0.7;
+          ctx.lineWidth = cell * 0.3;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        } else {
+          const r = cellRect(target.col, target.row, view);
+          ctx.globalAlpha = 0.3;
+          ctx.fillRect(r.x, r.y, r.size, r.size);
+          ctx.globalAlpha = 0.85;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(r.x, r.y, r.size, r.size);
+        }
+        ctx.restore();
+      };
+      for (const t of pulseSourceHoverTargets) {
+        drawPulseSourceHighlight(targetFromKey(t.key));
       }
     }
 
@@ -2767,13 +3789,35 @@
       </svg>`;
     }
     if (type.id === 'recolor') {
-      // A paintbrush: angled handle, a bold wedge-shaped bristle tip,
-      // and a paint dab at the base - sized generously since a subtle
-      // wedge disappears at icon scale.
-      return `<svg width="${u}" height="${u}" viewBox="0 0 ${u} ${u}">
-        <line x1="4" y1="21" x2="13" y2="12" stroke="${WALL_COLOR}" stroke-width="2.4" stroke-linecap="round"/>
-        <path d="M11,13 L18,2 L22,5 L14,15 Z" fill="${WALL_COLOR}"/>
-        <circle cx="4" cy="21" r="2.8" fill="${WALL_COLOR}"/>
+      // Hand-drawn paintbrush, second pass (RecolorLogicFocused.svg,
+      // September 2026 - replaces the first RecolorLogicIcon.svg pass,
+      // per the person's own "not liking how it looks, try these").
+      // A genuinely different composition, not just a resize like the
+      // Paint/Configure tool icons got - a tight crop on just the
+      // bristle tip and ferrule band, in a tall/narrow 33x63 native
+      // canvas rather than the first pass's roughly-square full-handle
+      // 132x143. Kept in its own native viewBox rather than redrawn on
+      // the shared 24-unit logic-icon grid the other four types use,
+      // same "custom art keeps its own coordinate system" convention
+      // the structures' hand-drawn pieces (chest/sack/lever) already
+      // established. See drawLogicIcon's own 'recolor' branch for the
+      // matching Path2D reconstruction, kept numerically identical.
+      // width/height fixed to the icon's own 33x63 aspect (scaled to
+      // fit within the u x u swatch box via preserveAspectRatio, the
+      // SVG default) rather than forced into a u x u square, which
+      // squashed it noticeably fatter than the placed version. The
+      // outline path below is stroke-only by design (the fill comes
+      // from the ferrule path underneath it) - it needs fill="none"
+      // explicitly, because leaving fill unset defaults to SVG's own
+      // black, and this path's d happens to trace a near-closed loop
+      // around the ferrule, so the browser filled that whole band
+      // solid black on top of the correct cream fill. The canvas
+      // version (drawLogicIcon) never had this bug since it only ever
+      // called ctx.stroke() on this Path2D, never ctx.fill().
+      return `<svg width="${u}" height="${u * 63 / 33}" viewBox="0 0 33 63">
+        <path d="M4.27975 30.7758C6.49335 33.7208 12.526 33.8251 15.2657 33.5092C15.2657 33.5092 19.3781 33.4966 24.1669 32.0979C28.9557 30.6992 30.9894 27.4647 30.9707 24.6971C30.952 21.9296 28.845 14.5566 27.4525 11.3319C26.0593 8.10769 5.46174 3.09767 5.46174 3.09767C5.46174 3.09767 10.3129 10.9241 10.3322 13.6911C10.351 16.4586 2.06623 27.8307 4.27975 30.7758Z" fill="${DEFAULT_SECONDARY_COLOR}" stroke="${WALL_COLOR}" stroke-width="4"/>
+        <path d="M6.36962 45.8517L24.8764 45.7666C24.8764 45.7666 27.6897 43.1592 29.1997 61.0071L2.19061 61.0071C3.62922 45.2256 6.36962 45.8517 6.36962 45.8517Z" fill="${DEFAULT_SECONDARY_COLOR}"/>
+        <path d="M7.37137 39.4336L25.8781 39.3486M24.8764 45.7666L6.36962 45.8517C6.36962 45.8517 3.62922 45.2256 2.19061 61.0071L29.1997 61.0071C27.6897 43.1592 24.8764 45.7666 24.8764 45.7666Z" fill="none" stroke="${WALL_COLOR}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>`;
     }
     if (type.id === 'move') {
@@ -2803,6 +3847,65 @@
   // calls) so the map icon and the tray preview never drift apart.
   const LOGIC_ICON_SCALE = 0.5;
   const LOGIC_SQUARE_PADDING = 1.2; // the backed square is only 20% bigger than the icon itself
+
+  // Whether a given Logic piece is currently in sequence mode - checks
+  // whichever of the three sequence-capable types' own toggle actually
+  // applies to it, since hideSequence/recolorSequence/moveSequence are
+  // separate Maps (each type keeps its own Settings) even though they
+  // share the one logicSequenceStep counter (see that Map's own
+  // comment). Switch/Break have no sequence concept at all.
+  function pieceSequenceOn(key, typeId) {
+    if (typeId === 'hide') return getMapOr(hideSequence, key, false);
+    if (typeId === 'recolor') return getMapOr(recolorSequence, key, false);
+    if (typeId === 'move') return getMapOr(moveSequence, key, false);
+    return false;
+  }
+
+  // The steps array actually backing a given sequence-capable piece -
+  // shared by the badge's own "am I past the last step" check below
+  // (fireHide/fireRecolor/fireMove each already read their own type's
+  // steps map directly, but the badge needs to check all three from one
+  // generic call site the same way pieceSequenceOn does).
+  function sequenceStepsFor(key, typeId) {
+    if (typeId === 'hide') return hideSequenceSteps.get(key) || [];
+    if (typeId === 'recolor') return recolorSequenceSteps.get(key) || [];
+    if (typeId === 'move') return moveSequenceSteps.get(key) || [];
+    return [];
+  }
+
+  // The "next sequence step" badge: a black circle with a white label,
+  // in the top-right corner of the Logic piece's own backing square
+  // (see drawLogicIcon just below - same LOGIC_ICON_SCALE/
+  // LOGIC_SQUARE_PADDING math, kept in sync deliberately so the badge
+  // always sits right on that corner regardless of zoom/cell size).
+  // `label` is normally the 1-based next step number, per spec ("a
+  // white number equal to the next sequence it will run") - but once
+  // `logicSequenceStep` has advanced past the last real step (see
+  // fireHide's own comment on why that's a real, visible state now
+  // rather than something that resolves itself within the same
+  // firing), there IS no "next step" to show a number for - the next
+  // firing resets instead of running anything - so the call site passes
+  // a reset glyph there instead of a number one past the end.
+  function drawLogicSequenceBadge(ctx, cx, cy, refSize, label) {
+    const iconSize = refSize * LOGIC_ICON_SCALE;
+    const squareSize = iconSize * LOGIC_SQUARE_PADDING;
+    const half = squareSize / 2;
+    const badgeRadius = Math.max(5, squareSize * 0.22);
+    const bx = cx + half;
+    const by = cy - half;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(bx, by, badgeRadius, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `${Math.round(badgeRadius * 1.2)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(label), bx, by + 1);
+    ctx.restore();
+  }
+
   function drawLogicIcon(ctx, cx, cy, refSize, typeId, alpha) {
     const a = alpha === undefined ? 1 : alpha;
     const iconSize = refSize * LOGIC_ICON_SCALE;
@@ -2863,20 +3966,36 @@
       ctx.lineTo(px(21), py(21));
       ctx.stroke();
     } else if (typeId === 'recolor') {
-      ctx.beginPath();
-      ctx.moveTo(px(4), py(21));
-      ctx.lineTo(px(13), py(12));
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(px(11), py(13));
-      ctx.lineTo(px(18), py(2));
-      ctx.lineTo(px(22), py(5));
-      ctx.lineTo(px(14), py(15));
-      ctx.closePath();
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(px(4), py(21), Math.max(1.4, 2.8 * s), 0, Math.PI * 2);
-      ctx.fill();
+      // Hand-drawn paintbrush, second pass (RecolorLogicFocused.svg) -
+      // its own native 33x63 coordinate space (a tight crop on just the
+      // bristle tip and ferrule band, replacing the first pass's
+      // roughly-square full-handle 132x143 art - see logicSwatchSvg's
+      // own 'recolor' comment), fit-by-larger-dimension and centered
+      // within iconSize, same approach as the structures' own custom
+      // art (drawChestIcon/drawItemIcon/drawLeverIcon) rather than the
+      // px/py 24-unit grid the other four Logic types use above. Kept
+      // numerically identical to logicSwatchSvg's own 'recolor' path
+      // data so the map icon and the tray preview never drift apart.
+      // Logic pieces have no color-override system of their own yet,
+      // so this always uses the fixed WALL_COLOR/DEFAULT_SECONDARY_COLOR
+      // pair - same as every other Logic type's icon.
+      const rNativeW = 33, rNativeH = 63;
+      const rScale = iconSize / Math.max(rNativeW, rNativeH);
+      ctx.save();
+      ctx.translate(cx - (rNativeW * rScale) / 2, cy - (rNativeH * rScale) / 2);
+      ctx.scale(rScale, rScale);
+      ctx.fillStyle = DEFAULT_SECONDARY_COLOR;
+      ctx.strokeStyle = WALL_COLOR;
+      ctx.lineWidth = 4;
+      const brushTip = new Path2D('M4.27975 30.7758C6.49335 33.7208 12.526 33.8251 15.2657 33.5092C15.2657 33.5092 19.3781 33.4966 24.1669 32.0979C28.9557 30.6992 30.9894 27.4647 30.9707 24.6971C30.952 21.9296 28.845 14.5566 27.4525 11.3319C26.0593 8.10769 5.46174 3.09767 5.46174 3.09767C5.46174 3.09767 10.3129 10.9241 10.3322 13.6911C10.351 16.4586 2.06623 27.8307 4.27975 30.7758Z');
+      ctx.fill(brushTip); ctx.stroke(brushTip);
+      const ferrule = new Path2D('M6.36962 45.8517L24.8764 45.7666C24.8764 45.7666 27.6897 43.1592 29.1997 61.0071L2.19061 61.0071C3.62922 45.2256 6.36962 45.8517 6.36962 45.8517Z');
+      ctx.fill(ferrule);
+      const outline = new Path2D('M7.37137 39.4336L25.8781 39.3486M24.8764 45.7666L6.36962 45.8517C6.36962 45.8517 3.62922 45.2256 2.19061 61.0071L29.1997 61.0071C27.6897 43.1592 24.8764 45.7666 24.8764 45.7666Z');
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke(outline);
+      ctx.restore();
     } else if (typeId === 'move') {
       ctx.beginPath();
       ctx.moveTo(px(5), py(9)); ctx.lineTo(px(2), py(12)); ctx.lineTo(px(5), py(15));
@@ -2963,8 +4082,36 @@
   const SELECT_ICON = `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M7.4 3 L7.4 19 L11.9 15.2 L15.2 21.3 L17.7 20 L14.4 13.9 L20.4 13.3 Z" fill="currentColor"/></svg>`;
   const HAMMER_ICON = `<svg viewBox="0 0 24 24" width="20" height="20"><g transform="rotate(45 12 12)"><rect x="8" y="3" width="8" height="6" rx="1" fill="currentColor"/><rect x="10.5" y="9" width="3" height="12" rx="1" fill="currentColor"/></g></svg>`;
   const DELETE_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>`;
-  const PAINT_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15c-2.2 0-4 1.8-4 4s1.8 2.5 4 2.5c1.6 0 2.7-.8 3-2"/><path d="M8.5 15.5c-.3-2.8.7-4.8 2.8-6.9l6-6 2.1 2.1-6 6c-2.1 2.1-4.1 3.1-6.9 2.8"/></svg>`;
-  const WRENCH_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 4.6L4 16.2V20h3.8l5.3-5.3a4 4 0 0 0 4.6-5.4l-2.8 2.8-2-2 2.8-2.8Z"/></svg>`;
+  // Hand-drawn tool icons (PaintToolSmaller.svg/ConfigureToolSmaller.svg,
+  // a September 2026 replacement for the first pass at these two - same
+  // shape, redrawn on a smaller native canvas, per the person's own
+  // "not liking how it looks, try these" - no design feedback was given
+  // beyond that, so nothing here was reinterpreted, just re-ported from
+  // the new files exactly like the first pass was). Colors converted
+  // from their source files' fixed ink hex to currentColor - unlike the
+  // map's own custom art (chest/sack/lever/recolor), these are plain UI
+  // chrome that has to follow .header-tool-btn's own color (muted/
+  // hover/active-on-accent-background), the same convention the old
+  // placeholder icons used. Kept in each file's own native viewBox
+  // rather than squeezed onto a shared grid - Configure's is exactly
+  // square (95x95), Paint's is close to it (92x102). Sized smaller
+  // than the old icons' 20x20 footprint (rather than matching it
+  // exactly), because this art runs edge-to-edge in its own viewBox
+  // with no internal padding, unlike Select/Place/Delete's glyphs,
+  // which sit inboard of their own 24x24 viewBox with room to spare -
+  // at equal width/height, Paint/Configure read as visibly bigger and
+  // bolder than the other three, per the person's "size down... so
+  // that they match the size of the other tools." Each keeps its own
+  // aspect ratio.
+  const PAINT_ICON = `<svg viewBox="0 0 92 102" width="15" height="17" fill="none">
+    <path d="M61.1517 28.056C60.036 31.4552 63.0676 34.6469 64.7229 35.8178C64.7229 35.8178 66.854 37.9293 70.396 39.3273C73.938 40.7252 77.467 39.2948 79.5786 37.1637C81.6901 35.0327 86.2554 28.2941 88.0085 25.104C89.7614 21.914 82.9774 7.44926 82.9774 7.44926C82.9774 7.44926 79.4811 15.9507 77.3695 18.0818C75.258 20.2128 62.2675 24.6567 61.1517 28.056Z" fill="currentColor" stroke="currentColor" stroke-width="6"/>
+    <path d="M12.5982 98.4761C5.65103 97.5181 3.6154 95.3831 3.00845 88.9741C3.00845 88.9741 3.37294 82.8583 25.1922 60.8375C47.0115 38.8166 50.2518 41.1877 50.2518 41.1877L59.8416 50.6896C59.8416 50.6896 63.6885 51.8216 40.1095 75.6183C16.5306 99.4151 12.5982 98.4761 12.5982 98.4761Z" fill="currentColor"/>
+    <path d="M55.5307 35.86L65.1204 45.362M3.00845 88.9741C3.6154 95.3831 5.65103 97.5181 12.5982 98.4761C12.5982 98.4761 16.5306 99.4151 40.1095 75.6183C63.6885 51.8216 59.8416 50.6896 59.8416 50.6896L50.2518 41.1877C50.2518 41.1877 47.0115 38.8166 25.1922 60.8375C3.37294 82.8583 3.00845 88.9741 3.00845 88.9741Z" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+  const WRENCH_ICON = `<svg viewBox="0 0 95 95" width="16" height="16" fill="none">
+    <path d="M3.024 83.3101L3.18537 74.9209L11.2518 66.8545L19.641 66.6931L58.6506 27.6835L58.6506 9.58227L65.2329 3H83.3341L70.4413 9.58227L67.7013 18.6329L69.6139 25.7709L76.3405 27.2721L85.3911 25.7709L91.9734 11.6392L91.9734 29.7405L85.3911 36.3228H67.2899L28.2803 75.3323L28.1189 83.7216L20.0525 91.788L11.6632 91.9494L3.024 83.3101Z" fill="currentColor"/>
+    <path d="M19.641 66.6931L11.2518 66.8545L3.18537 74.9209L3.024 83.3101L11.6632 91.9494L20.0525 91.788L28.1189 83.7216L28.2803 75.3323M19.641 66.6931L28.2803 75.3323M19.641 66.6931L58.6506 27.6835M28.2803 75.3323L67.2899 36.3228M58.6506 27.6835L67.2899 36.3228M58.6506 27.6835L58.6506 9.58227L65.2329 3H83.3341L70.4413 9.58227L67.7013 18.6329L69.6139 25.7709L76.3405 27.2721L85.3911 25.7709L91.9734 11.6392L91.9734 29.7405L85.3911 36.3228H67.2899" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
   const UNDO_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9,14 4,9 9,4"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>`;
   const REDO_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15,14 20,9 15,4"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>`;
   const SWAP_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l-3.5-3.5"/><path d="M18 16H6l3.5 3.5"/></svg>`;
@@ -3058,6 +4205,9 @@
       switchTriggerDropdownOpen = null;
       logicTriggerDropdownOpen = null;
       logicFieldDropdownOpen = null;
+      pulseSourceDropdownOpen = null;
+      pulseSourceHoverTargets = []; // no Settings panel left to be hovering from
+      configureTokenNameEditing = null; // a rename box left open shouldn't survive the tool being put down
       cancelPendingWire(); // closing the tool abandons any wire still being built - see the person's own spec
     }
     if (wasSelect && activeTool !== 'select') {
@@ -3480,6 +4630,12 @@
   }
 
   const RESET_ICON = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.5-5.8"/><path d="M4 4v5h5"/></svg>';
+  // Recolor's "Set Color" enable checkboxes (renderRecolorColorCheckbox).
+  const CHECK_ICON = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,13 9,18 20,6"/></svg>';
+  // A creature token's rename button, next to its name in the Configure
+  // panel (renderConfigureItem's own 'token' branch) - a plain pencil,
+  // same small-icon-button treatment as RESET_ICON above.
+  const EDIT_ICON = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 
   function renderColorChipGrid(colors, section, gridClass = 'paint-color-grid', allowFavoriteRemove = true) {
     if (colors.length === 0) return '<p class="menu-placeholder">None yet.</p>';
@@ -4143,7 +5299,7 @@
     // directly, bypassing the generic hasColors/Colors-subsection flow
     // that the other three categories go through) - recolorColors is
     // its dedicated per-instance store, same shape as the others.
-    return category === 'wall' ? wallColors : category === 'texture' ? textureColors : category === 'logic' ? recolorColors : structureColors;
+    return category === 'wall' ? wallColors : category === 'texture' ? textureColors : category === 'logic' ? recolorColors : category === 'token' ? tokenColors : structureColors;
   }
   function getItemColorOverride(item) {
     return colorMapFor(item.category).get(item.key) || {};
@@ -4174,21 +5330,24 @@
       const type = findType('texture', item.typeId);
       return { primary: (type && type.color) || DEFAULT_PRIMARY_COLOR, secondary: DEFAULT_SECONDARY_COLOR };
     }
-    if (item.category === 'logic') return { primary: DEFAULT_PRIMARY_COLOR }; // Recolor's "Set Color" - single color, no secondary concept
+    if (item.category === 'logic') return { primary: DEFAULT_PRIMARY_COLOR, secondary: DEFAULT_SECONDARY_COLOR }; // Recolor's "Set Color" section - now doubled up, see recolorColors' own comment
     return { primary: DEFAULT_PRIMARY_COLOR, secondary: DEFAULT_SECONDARY_COLOR };
   }
 
   // Gathers whatever's at a given target (an edge or a cell, same
   // shape configureTarget itself takes) into the fixed display order
-  // (Wall, Texture, Structure, Logic, Creature) - shared by Edit
+  // (Wall, Texture, Structure, Creature, Logic) - shared by Edit
   // mode's own listing and Wire mode's source/destination pickers, so
   // there's exactly one place that knows how to read "what's here".
+  // A creature is wireable exactly like everything else here (see
+  // handleMapClick's Interact-mode branch, which already sends a
+  // pulse from ANY found item generically - a token needed no special
+  // case there once it could actually have a wire to send one along).
   // Edge wins over the cell it borders (see handleMapClick's configure
   // branch) - an edge target only ever populates Wall/Structure(door)/
-  // Logic-on-that-edge; a plain tile target only ever populates
-  // Texture/Structure/Logic-on-that-cell. Creature still has nothing
-  // to check yet - listed in the comment, not the code, until there's
-  // an actual map to read from.
+  // Logic-on-that-edge (a token is never edge-bound, so it never
+  // appears there at all); a plain tile target only ever populates
+  // Texture/Structure/Creature/Logic-on-that-cell.
   function itemsAtTarget(target) {
     const items = [];
     if (!target) return items;
@@ -4205,6 +5364,15 @@
       if (textureTypeId) items.push({ category: 'texture', typeId: textureTypeId, key: cKey });
       const structureTypeId = structures.get(cKey);
       if (structureTypeId) items.push({ category: 'structure', typeId: structureTypeId, key: cKey });
+      // Creature - between Structure and Logic, matching the layer it
+      // draws on (see renderOverlay) and the priority findGrabbableAt
+      // gives it. typeId has no meaning for a token (it's not drawn
+      // from the type registry the way every other category is - see
+      // renderConfigureItem's own early-return 'token' branch), so
+      // it's left null, same as findGrabbableAt already leaves it.
+      if (window.CreatureTray && window.CreatureTray.getAt(cKey)) {
+        items.push({ category: 'token', typeId: null, key: cKey });
+      }
       const logicTypeId = logic.get(cKey);
       if (logicTypeId) items.push({ category: 'logic', typeId: logicTypeId, key: cKey });
     }
@@ -4289,16 +5457,97 @@
   // explicitly asked for even though at most one item per category can
   // occupy a given location, so the category alone would technically
   // disambiguate on its own.
+  //
+  // Both functions return the FULL name, untruncated - a creature's
+  // name (tray.js's displayNameFor) has no length limit the way every
+  // other category's fixed typeId-derived label effectively does, but
+  // clipping that only matters for the CLOSED display's fixed-width
+  // button, which handles it itself with plain CSS ellipsis (see
+  // .header-wire-picker-btn/.configure-trigger-btn's own
+  // .wire-endpoint-label-text child) - a dropdown OPTION or the wire
+  // panel's own item list (renderWireItemRow) has the room to show the
+  // real name in full, and shouldn't lose any of it.
+  //
+  // Creature is the one category typeIdAtKeyCategory doesn't (and
+  // can't) resolve - a token has no typeId at all, see
+  // renderConfigureItem's own 'token' branch - so both functions
+  // special-case it up front rather than reading "Unknown" off a
+  // typeId that was never going to exist.
   function wireEndpointLabel(key, category) {
+    if (category === 'token') return (window.CreatureTray && window.CreatureTray.getName(key)) || 'Unknown';
     const typeId = typeIdAtKeyCategory(key, category);
     if (!typeId) return 'Unknown';
     return typeId.charAt(0).toUpperCase() + typeId.slice(1);
   }
   function wireEndpointFullLabel(key, category) {
+    if (category === 'token') return `Creature: ${(window.CreatureTray && window.CreatureTray.getName(key)) || 'Unknown'}`;
     const typeId = typeIdAtKeyCategory(key, category);
     if (!typeId) return 'Unknown';
     return `${category.charAt(0).toUpperCase() + category.slice(1)}: ${typeId.charAt(0).toUpperCase() + typeId.slice(1)}`;
   }
+
+  // Every wire that feeds INTO this Logic piece (i.e. this piece is the
+  // one who'd receive a pulse from it) - the real, live answer to "what
+  // is this piece's Pulse source," now that the Wire graph actually
+  // does something (see "The Pulse system"). Order is whatever order
+  // `wires` itself holds them in (push order - see the Wire tool's own
+  // commit logic), which is also the order the "Multiple" dropdown and
+  // the Settings row's own numbering (if any) present them in.
+  function wiredSourcesFor(key) {
+    return wires
+      .filter((w) => w.toKey === key && w.toCategory === 'logic')
+      .map((w) => ({ key: w.fromKey, category: w.fromCategory }));
+  }
+
+  // The "Pulse source:" row shared by Switch/Break/Hide/Recolor/Move's
+  // Settings (renderSwitchTriggerSettings/renderLogicTriggerSettings
+  // both call this instead of hardcoding the old permanently-disabled
+  // "No wired source" placeholder). Three shapes depending on how many
+  // wires actually feed this piece, per spec:
+  //   0 sources - unchanged: a disabled "No wired source" button.
+  //   1 source  - the button just shows that source's name directly
+  //               (wireEndpointLabel - "Lever", not the fuller
+  //               "Structure: Lever" the dropdown below uses), no
+  //               dropdown needed since there's nothing to pick between.
+  //   2+ sources - the button reads "Multiple" and opens a dropdown
+  //               listing every source by its full label.
+  // Hovering is wired separately (see wirePulseSourceControls) via the
+  // data-pulse-source-hover-* attributes below - present whenever
+  // there's at least one source to highlight, regardless of which of
+  // the three shapes this is.
+  function renderPulseSourceRow(item, source) {
+    const sources = wiredSourcesFor(item.key);
+    if (sources.length === 0) {
+      return `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Pulse source:</span>
+        <div class="configure-trigger-wrap">
+          <button class="header-selection-btn configure-trigger-btn" disabled>No wired source</button>
+        </div>
+      </div>`;
+    }
+    const isMulti = sources.length > 1;
+    const isOpen = isMulti && !!pulseSourceDropdownOpen && pulseSourceDropdownOpen.key === item.key && pulseSourceDropdownOpen.source === source;
+    const label = isMulti ? 'Multiple' : wireEndpointLabel(sources[0].key, sources[0].category);
+    const toggleAttrs = isMulti ? `data-pulse-source-toggle-key="${item.key}" data-pulse-source-toggle-source="${source}"` : '';
+    const dropdownHtml = isOpen ? `
+      <div class="header-dropdown configure-trigger-dropdown">
+        ${sources.map((s, i) => `
+          <button class="header-dropdown-item" data-pulse-source-item-key="${item.key}" data-pulse-source-item-source="${source}" data-pulse-source-item-index="${i}">${wireEndpointFullLabel(s.key, s.category)}</button>
+        `).join('')}
+      </div>
+    ` : '';
+    return `
+      <div class="configure-position-line configure-trigger-row">
+        <span>Pulse source:</span>
+        <div class="configure-trigger-wrap">
+          <button class="header-selection-btn configure-trigger-btn" data-pulse-source-hover-key="${item.key}" data-pulse-source-hover-source="${source}" ${toggleAttrs}><span class="wire-endpoint-label-text">${label}</span>${isMulti ? '<span class="header-caret">&#9662;</span>' : ''}</button>
+          ${dropdownHtml}
+        </div>
+      </div>
+    `;
+  }
+
   // A wire's own color row - same .configure-color-row/.configure-
   // color-chip/reset-button markup Edit mode's own color rows use, and
   // now the same SV-square-plus-sliders picker too (see
@@ -4554,21 +5803,35 @@
       });
     });
 
-    // Move's x/y/z position fields - commits on blur/Enter, same
+    // Move's x/z position fields - commits on blur/Enter, same
     // convention as the color hex input (no re-render while typing).
+    // The field labeled "z" is a display-only alias for the vector's
+    // own `y` property (see renderVectorRow's comment) - sign-flipped
+    // both ways here, so what the person types as "z" lands correctly
+    // negated in the same `y` slot computeMoveDestinationKey has
+    // always read. Positions are grid-integer only (the person's
+    // explicit direction: "decimals let things go off grid which
+    // should not be possible"), so a typed value is always rounded
+    // before it's compared or stored, and the field is re-rendered
+    // afterward to snap its displayed text back to that rounded value
+    // even when the underlying number didn't actually change.
     containerEl.querySelectorAll('.configure-vector-input').forEach((input) => {
       input.addEventListener('click', (e) => e.stopPropagation());
       const commit = () => {
+        if (input.disabled) return; // the placeholder "y" (height) field - inert until a real Y-axis exists, guarded here too in case it's ever reached some way other than a real user click/type
         const def = VECTOR_MAP_DEFS[input.dataset.vectorMap];
         if (!def) return;
         const stepIndex = Number(input.dataset.vectorStep);
         const axis = input.dataset.vectorAxis;
-        const num = Number(input.value);
-        if (Number.isNaN(num)) { rerender(); return; }
+        const prop = axis === 'z' ? 'y' : axis;
+        const typed = Number(input.value);
+        if (Number.isNaN(typed)) { rerender(); return; }
+        const rounded = Math.round(typed);
+        const num = axis === 'z' ? -rounded : rounded;
         const current = readStepAware(def, input.dataset.vectorKey, stepIndex, { x: 0, y: 0, z: 0 }) || { x: 0, y: 0, z: 0 };
-        if (current[axis] === num) return; // no actual change - don't push an undo step or re-render
+        if (current[prop] === num) { rerender(); return; } // no real change, but still re-render so a typed decimal snaps back to its rounded/sign-corrected display
         pushUndoSnapshot();
-        writeStepAware(def, input.dataset.vectorKey, stepIndex, { ...current, [axis]: num });
+        writeStepAware(def, input.dataset.vectorKey, stepIndex, { ...current, [prop]: num });
         window.BattleMap.requestRedraw();
         rerender();
       };
@@ -4656,8 +5919,8 @@
     containerEl.querySelectorAll('[data-step-color-picker-key]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const target = { key: btn.dataset.stepColorPickerKey, stepsMapName: btn.dataset.stepColorPickerStepsMap, stepIndex: Number(btn.dataset.stepColorPickerIndex), source: btn.dataset.stepColorPickerSource };
-        const already = configureColorPickerOpen && configureColorPickerOpen.key === target.key && configureColorPickerOpen.stepsMapName === target.stepsMapName && configureColorPickerOpen.stepIndex === target.stepIndex && configureColorPickerOpen.source === target.source;
+        const target = { key: btn.dataset.stepColorPickerKey, stepsMapName: btn.dataset.stepColorPickerStepsMap, stepIndex: Number(btn.dataset.stepColorPickerIndex), which: btn.dataset.stepColorPickerWhich, source: btn.dataset.stepColorPickerSource };
+        const already = configureColorPickerOpen && configureColorPickerOpen.key === target.key && configureColorPickerOpen.stepsMapName === target.stepsMapName && configureColorPickerOpen.stepIndex === target.stepIndex && configureColorPickerOpen.which === target.which && configureColorPickerOpen.source === target.source;
         if (!already) pushUndoSnapshot();
         configureColorPickerOpen = already ? null : target;
         configureColorDragContainer = containerEl;
@@ -4669,10 +5932,10 @@
     containerEl.querySelectorAll('[data-step-hex-toggle-key]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        configureHexEditing = { key: btn.dataset.stepHexToggleKey, stepsMapName: btn.dataset.stepHexToggleStepsMap, stepIndex: Number(btn.dataset.stepHexToggleIndex), source: btn.dataset.stepHexToggleSource };
+        configureHexEditing = { key: btn.dataset.stepHexToggleKey, stepsMapName: btn.dataset.stepHexToggleStepsMap, stepIndex: Number(btn.dataset.stepHexToggleIndex), which: btn.dataset.stepHexToggleWhich, source: btn.dataset.stepHexToggleSource };
         configureColorPickerOpen = null;
         rerender();
-        const input = containerEl.querySelector('.configure-step-color-hex-input');
+        const input = containerEl.querySelector(`.configure-step-color-hex-input[data-step-hex-which="${btn.dataset.stepHexToggleWhich}"]`);
         if (input) { input.focus(); input.select(); }
       });
     });
@@ -4683,7 +5946,7 @@
         if (val && !val.startsWith('#')) val = '#' + val;
         if (/^#[0-9a-fA-F]{6}$/.test(val)) {
           pushUndoSnapshot();
-          setPickerTargetHex({ key: input.dataset.stepHexKey, stepsMapName: input.dataset.stepHexStepsMap, stepIndex: Number(input.dataset.stepHexIndex) }, val.toLowerCase());
+          setPickerTargetHex({ key: input.dataset.stepHexKey, stepsMapName: input.dataset.stepHexStepsMap, stepIndex: Number(input.dataset.stepHexIndex), which: input.dataset.stepHexWhich }, val.toLowerCase());
           window.BattleMap.requestRedraw();
         }
         configureHexEditing = null;
@@ -4694,6 +5957,32 @@
         else if (e.key === 'Escape') { configureHexEditing = null; rerender(); }
       });
       input.addEventListener('blur', commit);
+    });
+
+    // Recolor's "Set Color" enable checkboxes - one per Primary/
+    // Secondary row (flat or per-step, per getRecolorColorEnabled/
+    // setRecolorColorEnabled's own shape). Turning a row OFF while the
+    // other is already off would leave both disabled, which the spec
+    // explicitly forbids ("one must be on at all times") - rather than
+    // just refuse the click, this flips the OTHER row back on instead,
+    // so the checkbox always does *something* rather than silently
+    // no-op'ing when it's the last one standing.
+    containerEl.querySelectorAll('[data-recolor-enable-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        const key = btn.dataset.recolorEnableKey;
+        const stepIndex = Number(btn.dataset.recolorEnableStep);
+        const which = btn.dataset.recolorEnableWhich;
+        const otherWhich = which === 'primary' ? 'secondary' : 'primary';
+        const nextEnabled = !getRecolorColorEnabled(key, stepIndex, which);
+        setRecolorColorEnabled(key, stepIndex, which, nextEnabled);
+        if (!nextEnabled && !getRecolorColorEnabled(key, stepIndex, otherWhich)) {
+          setRecolorColorEnabled(key, stepIndex, otherWhich, true);
+        }
+        window.BattleMap.requestRedraw();
+        rerender();
+      });
     });
 
     // "Add Step +" - appends one default-valued step for whichever
@@ -4727,6 +6016,49 @@
         stepsMap.set(key, (stepsMap.get(key) || []).filter((_, i) => i !== index));
         logicFieldDropdownOpen = null;
         rerender();
+      });
+    });
+  }
+
+  // The "Pulse source:" row's own wiring (renderPulseSourceRow) - one
+  // shared function for both surfaces, same convention as
+  // wireLogicSettingsControls/wireWireColorRows above, so the sidebar's
+  // always-visible Settings subsection and the header's gear dropdown
+  // can't drift apart. Covers all three moving parts: the "Multiple"
+  // button's open/close toggle, and the two hover targets (the row's
+  // own button - highlights every wired source; a specific item inside
+  // the open dropdown - highlights just that one).
+  function wirePulseSourceControls(containerEl, rerender) {
+    containerEl.querySelectorAll('[data-pulse-source-toggle-key]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.pulseSourceToggleKey;
+        const source = btn.dataset.pulseSourceToggleSource;
+        const already = pulseSourceDropdownOpen && pulseSourceDropdownOpen.key === key && pulseSourceDropdownOpen.source === source;
+        pulseSourceDropdownOpen = already ? null : { key, source };
+        rerender();
+      });
+    });
+    containerEl.querySelectorAll('[data-pulse-source-hover-key]').forEach((btn) => {
+      btn.addEventListener('mouseenter', () => {
+        pulseSourceHoverTargets = wiredSourcesFor(btn.dataset.pulseSourceHoverKey);
+        window.BattleMap.requestRedraw();
+      });
+      btn.addEventListener('mouseleave', () => {
+        pulseSourceHoverTargets = [];
+        window.BattleMap.requestRedraw();
+      });
+    });
+    containerEl.querySelectorAll('[data-pulse-source-item-key]').forEach((btn) => {
+      btn.addEventListener('mouseenter', () => {
+        const sources = wiredSourcesFor(btn.dataset.pulseSourceItemKey);
+        const index = Number(btn.dataset.pulseSourceItemIndex);
+        pulseSourceHoverTargets = sources[index] ? [sources[index]] : [];
+        window.BattleMap.requestRedraw();
+      });
+      btn.addEventListener('mouseleave', () => {
+        pulseSourceHoverTargets = [];
+        window.BattleMap.requestRedraw();
       });
     });
   }
@@ -4803,6 +6135,14 @@
     mapContextMenuEl.style.left = `${clientX - viewportRect.left}px`;
     mapContextMenuEl.style.top = `${clientY - viewportRect.top}px`;
     renderMapContextMenu();
+    // See the document 'click' dismissal handler below for why this
+    // guard exists - it's only ever needed when this menu is opened
+    // from the SAME left-click gesture that would otherwise
+    // immediately close it again (Break's confirm, opened from an
+    // Interact-mode click) - a right-click open has no trailing
+    // 'click' event to race against, so this is a harmless no-op then.
+    mapContextMenuJustOpened = true;
+    setTimeout(() => { mapContextMenuJustOpened = false; }, 0);
   }
   function hideMapContextMenu() {
     mapContextMenu = null;
@@ -4895,13 +6235,13 @@
     const options = configureTarget ? itemsAtTarget(configureTarget) : [];
     const disabled = !configureTarget || options.length === 0;
     const item = getConfigureSelectedItem();
-    const label = item ? `${item.category.charAt(0).toUpperCase() + item.category.slice(1)}: ${item.typeId.charAt(0).toUpperCase() + item.typeId.slice(1)}` : 'None';
+    const label = item ? configureItemLabel(item) : 'None';
 
     const dropdownHtml = configureItemDropdownOpen ? `
       <div class="header-dropdown configure-trigger-dropdown">
         ${options.length === 0 ? '<div class="configure-trigger-empty">Nothing here.</div>' : options.map((o) => `
           <button class="header-dropdown-item${item && item.key === o.key && item.category === o.category ? ' active' : ''}" data-header-item-key="${o.key}" data-header-item-category="${o.category}">
-            ${o.category.charAt(0).toUpperCase() + o.category.slice(1)}: ${o.typeId.charAt(0).toUpperCase() + o.typeId.slice(1)}
+            ${configureItemLabel(o)}
           </button>
         `).join('')}
       </div>
@@ -4909,11 +6249,27 @@
 
     return `
       <div class="header-selection-item">
-        <button class="header-selection-btn configure-trigger-btn" id="configureItemSelectBtn" ${disabled ? 'disabled' : ''}>${label}<span class="header-caret">&#9662;</span></button>
+        <button class="header-selection-btn configure-trigger-btn" id="configureItemSelectBtn" ${disabled ? 'disabled' : ''}><span class="wire-endpoint-label-text">${label}</span><span class="header-caret">&#9662;</span></button>
         ${dropdownHtml}
       </div>
       ${item ? renderHeaderConfigureDetails(item) : ''}
     `;
+  }
+
+  // "Category: Type" for everything except a creature token, which has
+  // no typeId at all (it's not drawn from the type registry - see
+  // renderConfigureItem's own 'token' early-return) - "Creature: <name>"
+  // instead, reaching into tray.js the same way the sidebar's own
+  // token row does. Shared by the header's closed selection button and
+  // its item-picker dropdown options (both used to build their label
+  // the same inline way, which is exactly what broke - see the header
+  // comment above this whole "CONFIGURE TOOL" section's header-details
+  // split for the crash this replaced).
+  function configureItemLabel(item) {
+    if (item.category === 'token') {
+      return `Creature: ${(window.CreatureTray && window.CreatureTray.getName(item.key)) || ''}`;
+    }
+    return `${item.category.charAt(0).toUpperCase() + item.category.slice(1)}: ${item.typeId.charAt(0).toUpperCase() + item.typeId.slice(1)}`;
   }
 
   // Switch's Settings content - "Trigger on:" plus whatever follows
@@ -4926,24 +6282,25 @@
   // used to key switchTriggerDropdownOpen, so opening this dropdown on
   // one surface doesn't affect the other's copy.
   //
-  // Cosmetic only, per spec: this drives what the menu displays and
-  // persists per-instance (undo-tracked, survives Arrange-move, reset
-  // on delete/replace - see the switchTriggerModes/switchEveryTurn
-  // declarations and their call sites), but nothing reads it to
-  // actually fire anything yet - there's no Play mode to walk a wire
-  // graph with yet, same status as every other Logic piece.
+  // The trigger MODE itself is still cosmetic only for Round Start/Turn
+  // Start (no creature/turn data exists yet to drive them - see "The
+  // Pulse system"), but Pulse mode is real: the "Pulse source:" row
+  // below (renderPulseSourceRow) reflects the actual Wire graph now,
+  // not a permanent placeholder.
   //
   // Trigger on: Pulse (default) | Interact | Round Start | Turn Start.
-  //   - Pulse: shows a "Pulse source:" row (a general item's pulse -
-  //     nothing to wire it to yet, so it always reads "No wired source").
+  //   - Pulse: shows a "Pulse source:" row - real now (see
+  //     renderPulseSourceRow): the name of whatever's wired in, if
+  //     there's exactly one, or "Multiple" with a dropdown if more.
   //   - Interact: nothing further - the switch itself is the thing
   //     interacted with, same as Select tool's own Interact mode
   //     already does for lever/door.
   //   - Round Start: nothing further - fires globally, no source to pick.
   //   - Turn Start: shows an "Every Turn" toggle (default off). While
-  //     off, shows its own "Pulse source:" row (a specific creature's
-  //     turn this time, not a general item - still always "No wired
-  //     source" until the creature layer and real wiring exist).
+  //     off, shows its own "Pulse source:" row (still keyed off the
+  //     Wire graph the same way - a specific creature's turn isn't a
+  //     distinct wiring concept, just a different trigger MOMENT, until
+  //     the creature/turn layer exists).
   function renderSwitchTriggerSettings(item, source) {
     const mode = switchTriggerModes.get(item.key) || 'pulse';
     const everyTurn = switchEveryTurn.get(item.key) || false;
@@ -4974,13 +6331,7 @@
           <span class="configure-toggle-thumb"></span>
         </button>
       </div>` : ''}
-      ${showPulseSource ? `
-      <div class="configure-position-line configure-trigger-row">
-        <span>Pulse source:</span>
-        <div class="configure-trigger-wrap">
-          <button class="header-selection-btn configure-trigger-btn" disabled>No wired source</button>
-        </div>
-      </div>` : ''}
+      ${showPulseSource ? renderPulseSourceRow(item, source) : ''}
     `;
   }
 
@@ -5038,7 +6389,9 @@
     if (target.stepsMapName) {
       const stepsMap = STEPS_MAPS()[target.stepsMapName];
       const step = (stepsMap.get(target.key) || [])[target.stepIndex];
-      return (step && step.color) || DEFAULT_PRIMARY_COLOR;
+      const which = target.which || 'primary';
+      const fallback = which === 'secondary' ? DEFAULT_SECONDARY_COLOR : DEFAULT_PRIMARY_COLOR;
+      return (step && step[which]) || fallback;
     }
     const overrides = getItemColorOverride({ category: target.category, key: target.key });
     const defaults = defaultColorsFor({ category: target.category, key: target.key });
@@ -5049,7 +6402,8 @@
       const stepsMap = STEPS_MAPS()[target.stepsMapName];
       const steps = (stepsMap.get(target.key) || []).slice();
       if (!steps[target.stepIndex]) return;
-      steps[target.stepIndex] = { ...steps[target.stepIndex], color: hex };
+      const which = target.which || 'primary';
+      steps[target.stepIndex] = { ...steps[target.stepIndex], [which]: hex };
       stepsMap.set(target.key, steps);
       return;
     }
@@ -5081,13 +6435,7 @@
           ${dropdownHtml}
         </div>
       </div>
-      ${showPulseSource ? `
-      <div class="configure-position-line configure-trigger-row">
-        <span>Pulse source:</span>
-        <div class="configure-trigger-wrap">
-          <button class="header-selection-btn configure-trigger-btn" disabled>No wired source</button>
-        </div>
-      </div>` : ''}
+      ${showPulseSource ? renderPulseSourceRow(item, source) : ''}
     `;
   }
 
@@ -5155,14 +6503,36 @@
   // sub-label style already used for "Positioning"/"Settings" -
   // reusing .configure-subsection-label directly rather than inventing
   // a near-duplicate class.
+  // x and z are the real, editable axes here - the field literally
+  // labeled "z" used to be dead code (computeMoveDestinationKey never
+  // read it) while the field labeled "y" was silently the ONE field
+  // that actually drove the row (what the rest of the app calls "Z") -
+  // the root of the person's reported coordinate confusion. The
+  // vector's own stored shape keeps its {x, y, z} property names
+  // (nothing else needs to change), but this row now surfaces `y`
+  // under the label "z", sign-flipped to match the Positioning line's
+  // own now-flipped Z (see renderHeaderConfigureDetails).
+  // `y` itself is shown too - dimmed and disabled, not removed -
+  // because a real Y-axis (height) IS coming before 0.7.0 per the
+  // person's explicit correction ("there *will* be a y axis before
+  // long. Get that back in, you can dim it for now if you insist.").
+  // It always reads 0 and can't be typed into yet; once a real height
+  // axis exists, wire it up for real here rather than reusing the
+  // vector object's own vestigial `z` property (that property has
+  // never been read by anything and shouldn't suddenly start being
+  // read just because a field with the same on-screen label exists).
   function renderVectorRow(item, source, mapName, stepIndex, vec, label) {
-    const axes = ['x', 'y', 'z'];
+    const fields = [
+      { axis: 'x', value: vec.x, disabled: false },
+      { axis: 'y', value: 0, disabled: true },
+      { axis: 'z', value: -vec.y, disabled: false },
+    ];
     return `
       <div class="configure-position-line configure-vector-row">
         <span class="configure-subsection-label">${label}</span>
         <div class="configure-vector-fields">
-          ${axes.map((axis) => `
-            <label class="configure-vector-field">${axis}: <input type="number" class="configure-vector-input" data-vector-key="${item.key}" data-vector-map="${mapName}" data-vector-step="${stepIndex}" data-vector-axis="${axis}" value="${vec[axis]}"></label>
+          ${fields.map((f) => `
+            <label class="configure-vector-field${f.disabled ? ' disabled' : ''}"${f.disabled ? ' title="Y-axis (height) is not implemented yet"' : ''}>${f.axis}: <input type="number" step="1" class="configure-vector-input" data-vector-key="${item.key}" data-vector-map="${mapName}" data-vector-step="${stepIndex}" data-vector-axis="${f.axis}" value="${f.value}"${f.disabled ? ' disabled' : ''}></label>
           `).join('')}
         </div>
       </div>
@@ -5204,7 +6574,7 @@
     return { opacityMode: 'to', opacityToValue: 0, opacityByDirection: '-', opacityByValue: 50 };
   }
   function defaultRecolorStep() {
-    return { color: DEFAULT_PRIMARY_COLOR };
+    return { primary: DEFAULT_PRIMARY_COLOR, secondary: DEFAULT_SECONDARY_COLOR, primaryEnabled: true, secondaryEnabled: true };
   }
   function defaultMoveStep() {
     return { action: 'move', mode: 'to', newPosition: { x: 0, y: 0, z: 0 }, adjust: { x: 0, y: 0, z: 0 }, newRotation: 0, rotateAdjustDirection: '+', rotateAdjustStep: 0 };
@@ -5286,8 +6656,46 @@
   }
 
   // --- Recolor --------------------------------------------------------
-  function renderRecolorColorField(item, source, stepIndex) {
-    if (stepIndex === -1) {
+  // The checkbox that sits to the left of each Primary/Secondary row -
+  // "filled by default" per spec, i.e. checked/enabled unless the
+  // person has explicitly turned it off. Clicking it is wired in
+  // wireLogicSettingsControls, which also enforces "one must be on at
+  // all times" by flipping the other row back on if this click would
+  // otherwise leave both off.
+  function renderRecolorColorCheckbox(key, stepIndex, which, enabled) {
+    return `<button class="configure-checkbox-btn${enabled ? ' checked' : ''}" data-recolor-enable-key="${key}" data-recolor-enable-step="${stepIndex}" data-recolor-enable-which="${which}" title="${which === 'primary' ? 'Primary' : 'Secondary'} color ${enabled ? 'enabled' : 'disabled'}">${enabled ? CHECK_ICON : ''}</button>`;
+  }
+
+  // A sequence step's own Primary/Secondary swatch row - same circular-
+  // swatch-opens-the-full-picker experience as the flat case's
+  // renderConfigureColorRow, just backed by getPickerTargetHex/
+  // setPickerTargetHex's {stepsMapName,key,stepIndex,which} target
+  // shape instead of {category,key,which}, since the color lives inside
+  // an array element rather than a flat Map.
+  function renderRecolorStepColorRow(item, source, stepIndex, which, label) {
+    const hex = getPickerTargetHex({ stepsMapName: 'recolorSequenceSteps', key: item.key, stepIndex, which });
+    const isPickerOpen = !!(configureColorPickerOpen && configureColorPickerOpen.source === source && configureColorPickerOpen.stepsMapName === 'recolorSequenceSteps' && configureColorPickerOpen.key === item.key && configureColorPickerOpen.stepIndex === stepIndex && configureColorPickerOpen.which === which);
+    const isHexEditing = !!(configureHexEditing && configureHexEditing.source === source && configureHexEditing.stepsMapName === 'recolorSequenceSteps' && configureHexEditing.key === item.key && configureHexEditing.stepIndex === stepIndex && configureHexEditing.which === which);
+    return `
+      <div class="configure-color-row">
+        <span class="configure-color-label settings-row-label">${label}:</span>
+        <div class="configure-color-chip">
+          <button class="configure-step-color-swatch" style="background:${hex}" data-step-color-picker-key="${item.key}" data-step-color-picker-steps-map="recolorSequenceSteps" data-step-color-picker-index="${stepIndex}" data-step-color-picker-which="${which}" data-step-color-picker-source="${source}" title="Choose color"></button>
+          ${isHexEditing
+            ? `<input type="text" class="configure-step-color-hex-input" data-step-hex-key="${item.key}" data-step-hex-steps-map="recolorSequenceSteps" data-step-hex-index="${stepIndex}" data-step-hex-which="${which}" data-step-hex-source="${source}" value="${hex}" maxlength="7" spellcheck="false">`
+            : `<button class="configure-step-color-hex-btn" data-step-hex-toggle-key="${item.key}" data-step-hex-toggle-steps-map="recolorSequenceSteps" data-step-hex-toggle-index="${stepIndex}" data-step-hex-toggle-which="${which}" data-step-hex-toggle-source="${source}">${hex}</button>`}
+        </div>
+        ${isPickerOpen ? renderConfigureColorPicker(hex) : ''}
+      </div>
+    `;
+  }
+
+  // One checkbox-plus-color-row line - the checkbox sits to the left of
+  // the row exactly as it does in Primary/Secondary's own layout,
+  // wrapped in a flex row so the two read as one control.
+  function renderRecolorColorLine(item, source, stepIndex, which, label) {
+    const enabled = getRecolorColorEnabled(item.key, stepIndex, which);
+    const colorRow = stepIndex === -1
       // Reuses the exact same color-chip/hex/reset/picker UI as wall/
       // texture/structure - colorMapFor treats category 'logic' as
       // recolorColors (see that function), so this needs no bespoke
@@ -5295,27 +6703,27 @@
       // always assuming 'sidebar') since Recolor's own Settings body is
       // the one place this row layout is used from both surfaces - see
       // renderConfigureColorRow's own comment.
-      return renderConfigureColorRow(item, 'primary', 'Set Color', source);
-    }
-    // A sequence step's own color - same circular-swatch-opens-the-
-    // full-picker experience as the flat case above, just backed by
-    // getPickerTargetHex/setPickerTargetHex's {stepsMapName,key,
-    // stepIndex} target shape instead of {category,key,which}, since
-    // the color lives inside an array element rather than a flat Map.
-    const hex = getPickerTargetHex({ stepsMapName: 'recolorSequenceSteps', key: item.key, stepIndex });
-    const isPickerOpen = !!(configureColorPickerOpen && configureColorPickerOpen.source === source && configureColorPickerOpen.stepsMapName === 'recolorSequenceSteps' && configureColorPickerOpen.key === item.key && configureColorPickerOpen.stepIndex === stepIndex);
-    const isHexEditing = !!(configureHexEditing && configureHexEditing.source === source && configureHexEditing.stepsMapName === 'recolorSequenceSteps' && configureHexEditing.key === item.key && configureHexEditing.stepIndex === stepIndex);
+      ? renderConfigureColorRow(item, which, label, source)
+      : renderRecolorStepColorRow(item, source, stepIndex, which, label);
     return `
-      <div class="configure-color-row">
-        <span class="configure-color-label settings-row-label">Color:</span>
-        <div class="configure-color-chip">
-          <button class="configure-step-color-swatch" style="background:${hex}" data-step-color-picker-key="${item.key}" data-step-color-picker-steps-map="recolorSequenceSteps" data-step-color-picker-index="${stepIndex}" data-step-color-picker-source="${source}" title="Choose color"></button>
-          ${isHexEditing
-            ? `<input type="text" class="configure-step-color-hex-input" data-step-hex-key="${item.key}" data-step-hex-steps-map="recolorSequenceSteps" data-step-hex-index="${stepIndex}" data-step-hex-source="${source}" value="${hex}" maxlength="7" spellcheck="false">`
-            : `<button class="configure-step-color-hex-btn" data-step-hex-toggle-key="${item.key}" data-step-hex-toggle-steps-map="recolorSequenceSteps" data-step-hex-toggle-index="${stepIndex}" data-step-hex-toggle-source="${source}">${hex}</button>`}
-        </div>
-        ${isPickerOpen ? renderConfigureColorPicker(hex) : ''}
+      <div class="configure-recolor-color-line${enabled ? '' : ' disabled'}">
+        ${renderRecolorColorCheckbox(item.key, stepIndex, which, enabled)}
+        ${colorRow}
       </div>
+    `;
+  }
+
+  // The whole "Set Color" section - a headered subsection (same small-
+  // caps label style as "Positioning"/"Settings") holding a Primary and
+  // a Secondary row, each with its own enable checkbox. Originally a
+  // single unlabeled swatch; doubled up per the person's own critical-
+  // flaw callout that every other paintable thing in the app carries
+  // two colors, so Recolor should too - see recolorColors' own comment.
+  function renderRecolorSetColorSection(item, source, stepIndex) {
+    return `
+      <div class="configure-subsection-label">Set Color</div>
+      ${renderRecolorColorLine(item, source, stepIndex, 'primary', 'Primary')}
+      ${renderRecolorColorLine(item, source, stepIndex, 'secondary', 'Secondary')}
     `;
   }
 
@@ -5329,7 +6737,7 @@
       ${renderLogicTriggerSettings(item, source)}
       ${renderToggleRow('Sequence', item.key, 'recolorSequence', sequence, false)}
       ${!sequence ? `
-        ${renderRecolorColorField(item, source, -1)}
+        ${renderRecolorSetColorSection(item, source, -1)}
         ${renderToggleRow('Return on retrigger', item.key, 'recolorReturnOnRetrigger', returnOnRetrigger, true)}
       ` : `
         ${steps.map((s, i) => `
@@ -5338,7 +6746,7 @@
               <span>Step ${i + 1}</span>
               <button class="configure-sequence-remove-btn" data-sequence-remove-key="${item.key}" data-sequence-remove-map="recolorSequenceSteps" data-sequence-remove-index="${i}" title="Remove step">&times;</button>
             </div>
-            ${renderRecolorColorField(item, source, i)}
+            ${renderRecolorSetColorSection(item, source, i)}
           </div>
         `).join('')}
         <button class="configure-add-step-btn" data-sequence-add-key="${item.key}" data-sequence-add-map="recolorSequenceSteps" data-sequence-add-kind="recolor">Add Step +</button>
@@ -5428,17 +6836,61 @@
   // swatches, per the person's explicit direction) each with its own
   // reset button, then a swap button, then the Settings gear.
   function renderHeaderConfigureDetails(item) {
+    // Creature - position, the same primary/secondary color cluster
+    // every other placeable's header gets (colorMapFor/defaultColorsFor
+    // both do have a real 'token' case now - see their own comments),
+    // and now a Settings gear too, same shape Logic's own settings use
+    // (renderHeaderConfigureSettingsDropdown's logicRenderer param just
+    // means "whatever goes in the dropdown body" - a token's Label
+    // field fits that exactly as well as a Logic piece's own settings
+    // do). No rotation line - token has no concept of one. Rename lives
+    // in the sidebar's own row (renderConfigureItem), not duplicated
+    // here.
+    if (item.category === 'token') {
+      const [tc, tr] = item.key.split(',').map(Number);
+      return `
+      <div class="header-configure-cluster">
+        <div class="header-position-block"><span class="header-position-line">X: ${tc} &nbsp; Z: ${-tr}</span></div>
+        <div class="header-color-reset-stack">
+          <div class="header-color-stack">
+            <div class="header-color-row">
+              <div class="header-color-box-wrap">
+                ${renderHeaderConfigureColorBox(item, 'primary')}
+              </div>
+              ${renderHeaderConfigureResetBtn(item, 'primary')}
+            </div>
+            <div class="header-color-row">
+              <div class="header-color-box-wrap">
+                ${renderHeaderConfigureColorBox(item, 'secondary')}
+              </div>
+              ${renderHeaderConfigureResetBtn(item, 'secondary')}
+            </div>
+          </div>
+          <button class="header-icon-square-btn header-swap-btn" id="configureSwapColorsBtn" data-swap-key="${item.key}" data-swap-category="${item.category}" title="Swap primary and secondary">${SWAP_ICON}</button>
+        </div>
+        ${renderHeaderConfigureSettingsDropdown(item, null, true, false, renderTokenLabelSettings)}
+      </div>
+      `;
+    }
     const hasRotation = item.category === 'structure' || item.category === 'texture';
     const showRotationLine = item.category !== 'logic';
     const rotation = hasRotation ? (rotationMapFor(item).get(item.key) || 0) : 0;
 
+    // Z is the row, sign-flipped: row itself still increases downward
+    // on the canvas (see cellRect's own y = offsetY + row*cell), but
+    // the person's explicit correction is that going UP should read as
+    // a HIGHER Z, not a lower one, so every Z reported to the person -
+    // here, the sidebar's own copy below, and Move's "z" vector field -
+    // negates the raw row. Internal storage (cell/edge keys, the Move
+    // vector Maps) is untouched; only the number shown/typed at these
+    // boundaries is flipped.
     let posX, posZ;
     if (item.key.indexOf(':') !== -1) {
       const edge = parseWallKey(item.key);
-      posX = edge.col; posZ = edge.row;
+      posX = edge.col; posZ = -edge.row;
     } else {
       const [c, r] = item.key.split(',').map(Number);
-      posX = c; posZ = r;
+      posX = c; posZ = -r;
     }
 
     const hasColors = item.category !== 'logic';
@@ -5455,6 +6907,7 @@
     const hasSettings = !!toggle || isSwitch || !!logicRenderer;
 
     return `
+      <div class="header-configure-cluster">
       <div class="header-position-block">
         <span class="header-position-line">X: ${posX} &nbsp; Z: ${posZ}</span>
         ${showRotationLine ? `
@@ -5465,18 +6918,25 @@
       </div>
       ${hasColors ? `
       <div class="header-color-reset-stack">
-        <div class="header-color-box-wrap">
-          ${renderHeaderConfigureColorBox(item, 'primary')}
+        <div class="header-color-stack">
+          <div class="header-color-row">
+            <div class="header-color-box-wrap">
+              ${renderHeaderConfigureColorBox(item, 'primary')}
+            </div>
+            ${renderHeaderConfigureResetBtn(item, 'primary')}
+          </div>
+          ${hasSecondary ? `
+          <div class="header-color-row">
+            <div class="header-color-box-wrap">
+              ${renderHeaderConfigureColorBox(item, 'secondary')}
+            </div>
+            ${renderHeaderConfigureResetBtn(item, 'secondary')}
+          </div>` : ''}
         </div>
-        ${renderHeaderConfigureResetBtn(item, 'primary')}
-        ${hasSecondary ? `
-        <div class="header-color-box-wrap">
-          ${renderHeaderConfigureColorBox(item, 'secondary')}
-        </div>
-        ${renderHeaderConfigureResetBtn(item, 'secondary')}` : ''}
         ${hasSecondary ? `<button class="header-icon-square-btn header-swap-btn" id="configureSwapColorsBtn" data-swap-key="${item.key}" data-swap-category="${item.category}" title="Swap primary and secondary">${SWAP_ICON}</button>` : ''}
       </div>` : ''}
       ${renderHeaderConfigureSettingsDropdown(item, toggle, hasSettings, isSwitch, logicRenderer)}
+      </div>
     `;
   }
 
@@ -5499,10 +6959,16 @@
     `;
   }
 
+  // Same small icon-only reset button the sidebar's own color rows use
+  // (.configure-color-reset-btn - no border/background, just the icon)
+  // rather than the chunky bordered .header-icon-square-btn the swap/
+  // gear buttons use - the person's explicit correction: these divided
+  // the two stacked previews with full-size buttons where the usual
+  // small circular ones belonged.
   function renderHeaderConfigureResetBtn(item, which) {
     const overrides = getItemColorOverride(item);
     const isManual = !!overrides[which];
-    return `<button class="header-icon-square-btn" data-header-reset-key="${item.key}" data-header-reset-which="${which}" data-header-reset-category="${item.category}" title="Reset to default" ${isManual ? '' : 'disabled'}>${RESET_ICON}</button>`;
+    return `<button class="configure-color-reset-btn" data-header-reset-key="${item.key}" data-header-reset-which="${which}" data-header-reset-category="${item.category}" title="Reset to default" ${isManual ? '' : 'disabled'}>${RESET_ICON}</button>`;
   }
 
   // The header's gear/Settings button - dimmed when the selected item
@@ -5576,7 +7042,7 @@
     return `
       <div class="header-wire-picker-group">
         <div class="header-selection-item">
-          <button class="header-selection-btn header-wire-picker-btn" id="headerWireSourceBtn" ${sourceDisabled ? 'disabled' : ''}>${sourceLabel}<span class="header-caret">&#9662;</span></button>
+          <button class="header-selection-btn header-wire-picker-btn" id="headerWireSourceBtn" ${sourceDisabled ? 'disabled' : ''}><span class="wire-endpoint-label-text">${sourceLabel}</span><span class="header-caret">&#9662;</span></button>
           ${sourceDropdownHtml}
         </div>
         <span class="header-wire-arrow">&rarr;</span>
@@ -5608,10 +7074,20 @@
   }
 
   function renderWireItemRow(item) {
-    const type = findType(item.category, item.typeId);
+    // Creature - same "no type registry entry" situation as
+    // renderConfigureItem's own 'token' branch: no preview icon, and
+    // "Creature"/its name stand in for the category/type labels every
+    // other row derives from findType. Everything past this point
+    // (connection rows, the pending-wire row, the "+" button) is
+    // already category-agnostic, so nothing else here needs to change
+    // for a token to be wireable.
+    const isToken = item.category === 'token';
+    const type = isToken ? null : findType(item.category, item.typeId);
     const preview = type ? previewForType(item.category, type) : '';
-    const categoryLabel = item.category.charAt(0).toUpperCase() + item.category.slice(1);
-    const nameLabel = item.typeId.charAt(0).toUpperCase() + item.typeId.slice(1);
+    const categoryLabel = isToken ? 'Creature' : item.category.charAt(0).toUpperCase() + item.category.slice(1);
+    const nameLabel = isToken
+      ? ((window.CreatureTray && window.CreatureTray.getName(item.key)) || '')
+      : item.typeId.charAt(0).toUpperCase() + item.typeId.slice(1);
     const isPending = sameWireEndpoint(item, pendingWireSource);
 
     // Wires FROM this item specifically - used only for the pending
@@ -5676,12 +7152,12 @@
         <div class="configure-position-line configure-wire-connection-row">
           <div class="configure-wire-connection-main">
             <div class="configure-trigger-wrap configure-trigger-wrap-source">
-              <button class="header-selection-btn configure-trigger-btn" data-wire-reopen-index="${idx}" data-wire-reopen-side="source">${wireEndpointLabel(w.fromKey, w.fromCategory)}<span class="header-caret">&#9662;</span></button>
+              <button class="header-selection-btn configure-trigger-btn" data-wire-reopen-index="${idx}" data-wire-reopen-side="source"><span class="wire-endpoint-label-text">${wireEndpointLabel(w.fromKey, w.fromCategory)}</span><span class="header-caret">&#9662;</span></button>
               ${sourceDropdownHtml}
             </div>
             <span class="configure-wire-arrow">&rarr;</span>
             <div class="configure-trigger-wrap">
-              <button class="header-selection-btn configure-trigger-btn" data-wire-reopen-index="${idx}" data-wire-reopen-side="dest">${wireEndpointLabel(w.toKey, w.toCategory)}<span class="header-caret">&#9662;</span></button>
+              <button class="header-selection-btn configure-trigger-btn" data-wire-reopen-index="${idx}" data-wire-reopen-side="dest"><span class="wire-endpoint-label-text">${wireEndpointLabel(w.toKey, w.toCategory)}</span><span class="header-caret">&#9662;</span></button>
               ${destDropdownHtml}
             </div>
             ${renderWireColorRow(w.color || DEFAULT_PRIMARY_COLOR, String(idx))}
@@ -5745,6 +7221,46 @@
   }
 
   function renderConfigureItem(item) {
+    // Creature - deliberately minimal for now (type/name/position
+    // only, per spec - "we'll add the rest soon"). A token has no
+    // entry in the type registry at all (findType('token', ...) would
+    // come back empty - it's not drawn from a type the way a wall/
+    // texture/structure/logic piece is), so this returns its own
+    // small markup up front rather than falling into the rest of this
+    // function's type/rotation/settings/color machinery, none of
+    // which applies to it yet.
+    if (item.category === 'token') {
+      const [tc, tr] = item.key.split(',').map(Number);
+      const name = (window.CreatureTray && window.CreatureTray.getName(item.key)) || '';
+      const isNameEditing = !!(configureTokenNameEditing && configureTokenNameEditing.source === 'sidebar' && configureTokenNameEditing.key === item.key);
+      const isPaired = !!(window.CreatureTray && window.CreatureTray.isPaired(item.key));
+      // Edit button next to the name - see configureTokenNameEditing's
+      // own comment and window.CreatureTray.renameToken for what
+      // committing it actually does (differs for standalone vs. paired,
+      // hence the title hint below matching whichever this one is).
+      return `
+        <div class="configure-item-row">
+          <div class="configure-item-header">
+            <div class="configure-item-text">
+              <div class="configure-item-type settings-row-label">Creature</div>
+              <div class="configure-item-name-row">
+                ${isNameEditing
+                  ? `<input type="text" class="configure-token-name-input" data-token-name-key="${item.key}" data-token-name-source="sidebar" value="${name}" maxlength="30" spellcheck="false">`
+                  : `<div class="configure-item-name settings-row-label">${name}</div>
+                     <button class="configure-token-rename-btn" data-token-rename-key="${item.key}" data-token-rename-source="sidebar" title="${isPaired ? 'Rename in the compiler' : 'Rename'}">${EDIT_ICON}</button>`}
+              </div>
+            </div>
+          </div>
+          <div class="configure-subsection-label">Positioning</div>
+          <div class="configure-position-line">X: ${tc} &nbsp; Y: 0 &nbsp; Z: ${-tr}</div>
+          <div class="configure-subsection-label">Settings</div>
+          ${renderTokenLabelSettings(item, 'sidebar')}
+          <div class="configure-subsection-label">Colors</div>
+          ${renderConfigureColorRow(item, 'primary', 'Primary')}
+          ${renderConfigureColorRow(item, 'secondary', 'Secondary')}
+        </div>
+      `;
+    }
     const type = findType(item.category, item.typeId);
     const preview = type ? previewForType(item.category, type) : '';
     const categoryLabel = item.category.charAt(0).toUpperCase() + item.category.slice(1);
@@ -5770,13 +7286,19 @@
     // Derived from the key's own shape (does it have a ':') rather
     // than category/typeId special-casing, so this works the same for
     // an edge-placed Logic piece as it does for a wall or a door.
+    //
+    // Sign-flipped per the person's explicit correction: "the higher
+    // you go, the lower the z axis gets, when it should be the
+    // opposite." Row still increases downward on the canvas itself;
+    // only the number shown here (and in Move's "z" field) negates it
+    // so that going up reads as a higher Z.
     let posX, posZ;
     if (item.key.indexOf(':') !== -1) {
       const edge = parseWallKey(item.key);
-      posX = edge.col; posZ = edge.row;
+      posX = edge.col; posZ = -edge.row;
     } else {
       const [c, r] = item.key.split(',').map(Number);
-      posX = c; posZ = r;
+      posX = c; posZ = -r;
     }
 
     // Logic has no color system yet either - skip the whole Colors
@@ -5846,6 +7368,31 @@
   // "Set Color" is the one case that reuses this full row layout in
   // BOTH surfaces (see renderRecolorColorField), so it passes its own
   // source through explicitly rather than always checking 'sidebar'.
+  // A creature token's Label override row - Settings subsection's one
+  // and only field for now (see window.BattleDraw.getTokenAcronym/
+  // setTokenAcronymOverride/clearTokenAcronymOverride's own comments
+  // for what it actually does). Reused in BOTH surfaces exactly the way
+  // Recolor's "Set Color" reuses renderConfigureColorRow just below -
+  // the sidebar shows it directly under its own "Settings" label, the
+  // header shows it inside the gear's dropdown (LOGIC_SETTINGS_RENDERERS-
+  // shaped: an (item, source) function, passed as renderHeaderConfigure
+  // SettingsDropdown's own logicRenderer param even though this isn't a
+  // Logic piece - that param just means "whatever goes in the dropdown
+  // body", which fits a token's Label field exactly as well).
+  function renderTokenLabelSettings(item, source) {
+    const acronym = (window.BattleDraw && window.BattleDraw.getTokenAcronym(item.key)) || '';
+    const hasOverride = tokenAcronymOverrides.has(item.key);
+    return `
+      <div class="configure-color-row configure-token-label-row">
+        <span class="configure-color-label settings-row-label">Label:</span>
+        <div class="configure-token-label-controls">
+          <input type="text" class="configure-token-label-input" data-label-key="${item.key}" data-label-source="${source}" value="${acronym}" maxlength="4" spellcheck="false">
+          <button class="configure-token-label-reset-btn" data-label-reset-key="${item.key}" data-label-reset-source="${source}" title="Reset to automatic" ${hasOverride ? '' : 'disabled'}>${RESET_ICON}</button>
+        </div>
+      </div>
+    `;
+  }
+
   function renderConfigureColorRow(item, which, label, source) {
     source = source || 'sidebar';
     const overrides = getItemColorOverride(item);
@@ -5927,6 +7474,7 @@
       });
     });
     wireLogicSettingsControls(sideScrollEl, () => { renderDrawTab(); renderHeaderLeft(); });
+    wirePulseSourceControls(sideScrollEl, () => { renderDrawTab(); renderHeaderLeft(); });
 
     // Switch's "Trigger on:" picker - same open/close-toggle-then-pick
     // shape as every other header-selection-btn dropdown in this file
@@ -6115,6 +7663,75 @@
       input.addEventListener('blur', commit);
     });
 
+    // Creature token rename - see configureTokenNameEditing's own
+    // comment and window.CreatureTray.renameToken for what committing
+    // actually does. Same click/commit/Escape/blur shape as the hex
+    // input just above, just swapping in renameToken instead of
+    // setItemColorOverride.
+    sideScrollEl.querySelectorAll('.configure-token-rename-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        configureTokenNameEditing = { key: btn.dataset.tokenRenameKey, source: btn.dataset.tokenRenameSource || 'sidebar' };
+        renderDrawTab();
+        const input = sideScrollEl.querySelector('.configure-token-name-input');
+        if (input) { input.focus(); input.select(); }
+      });
+    });
+    sideScrollEl.querySelectorAll('.configure-token-name-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        const key = input.dataset.tokenNameKey;
+        if (window.CreatureTray && window.CreatureTray.renameToken) window.CreatureTray.renameToken(key, input.value);
+        configureTokenNameEditing = null;
+        renderDrawTab();
+        renderHeaderLeft();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { configureTokenNameEditing = null; renderDrawTab(); }
+      });
+      input.addEventListener('blur', commit);
+    });
+
+    // Creature token Label override - Settings subsection's text field.
+    // A manual value sticks until the reset button next to it is
+    // pressed, exactly the override-until-reset shape Paint's own
+    // secondary-color reset already uses (see window.BattleDraw.
+    // setTokenAcronymOverride/clearTokenAcronymOverride's own comments).
+    // Committed on blur/Enter like every other Configure text field in
+    // this file - no separate click-to-edit toggle needed since this
+    // one's always a plain input, not a button that becomes one.
+    sideScrollEl.querySelectorAll('.configure-token-label-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        const key = input.dataset.labelKey;
+        const current = (window.BattleDraw && window.BattleDraw.getTokenAcronym(key)) || '';
+        const next = input.value.trim().slice(0, 4);
+        if (next === current) return; // no real change - don't waste an undo step
+        pushUndoSnapshot();
+        if (window.BattleDraw && window.BattleDraw.setTokenAcronymOverride) window.BattleDraw.setTokenAcronymOverride(key, next);
+        window.BattleMap.requestRedraw();
+        renderDrawTab();
+        renderHeaderLeft();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        else if (e.key === 'Escape') { input.value = (window.BattleDraw && window.BattleDraw.getTokenAcronym(input.dataset.labelKey)) || ''; input.blur(); }
+      });
+      input.addEventListener('blur', commit);
+    });
+    sideScrollEl.querySelectorAll('.configure-token-label-reset-btn').forEach((btn) => {
+      if (btn.disabled) return;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        if (window.BattleDraw && window.BattleDraw.clearTokenAcronymOverride) window.BattleDraw.clearTokenAcronymOverride(btn.dataset.labelResetKey);
+        window.BattleMap.requestRedraw();
+        renderDrawTab();
+        renderHeaderLeft();
+      });
+    });
+
     sideScrollEl.querySelectorAll('.configure-color-reset-btn').forEach((btn) => {
       if (btn.disabled) return;
       btn.addEventListener('click', (e) => {
@@ -6271,6 +7888,41 @@
       });
     });
 
+    // Creature token Label override - header's own copy of the same
+    // field the sidebar shows directly (see renderTokenLabelSettings'
+    // own comment), just reached through the Settings gear's dropdown
+    // here instead of always being visible.
+    headerLeftEl.querySelectorAll('.configure-token-label-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const commit = () => {
+        const key = input.dataset.labelKey;
+        const current = (window.BattleDraw && window.BattleDraw.getTokenAcronym(key)) || '';
+        const next = input.value.trim().slice(0, 4);
+        if (next === current) return;
+        pushUndoSnapshot();
+        if (window.BattleDraw && window.BattleDraw.setTokenAcronymOverride) window.BattleDraw.setTokenAcronymOverride(key, next);
+        window.BattleMap.requestRedraw();
+        renderHeaderLeft();
+        renderDrawTab();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        else if (e.key === 'Escape') { input.value = (window.BattleDraw && window.BattleDraw.getTokenAcronym(input.dataset.labelKey)) || ''; input.blur(); }
+      });
+      input.addEventListener('blur', commit);
+    });
+    headerLeftEl.querySelectorAll('.configure-token-label-reset-btn').forEach((btn) => {
+      if (btn.disabled) return;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pushUndoSnapshot();
+        if (window.BattleDraw && window.BattleDraw.clearTokenAcronymOverride) window.BattleDraw.clearTokenAcronymOverride(btn.dataset.labelResetKey);
+        window.BattleMap.requestRedraw();
+        renderHeaderLeft();
+        renderDrawTab();
+      });
+    });
+
     const swapBtn = headerLeftEl.querySelector('#configureSwapColorsBtn');
     if (swapBtn) {
       swapBtn.addEventListener('click', (e) => {
@@ -6330,6 +7982,7 @@
       });
     });
     wireLogicSettingsControls(headerLeftEl, () => { renderHeaderLeft(); renderDrawTab(); });
+    wirePulseSourceControls(headerLeftEl, () => { renderHeaderLeft(); renderDrawTab(); });
 
     // Switch's "Trigger on:" picker - header mirror of the sidebar
     // wiring above (see that copy's own comment).
@@ -6416,8 +8069,8 @@
     if (satSlider) satSlider.style.setProperty('--track-gradient', `linear-gradient(to right, ${hsvToHex(h, 0, v)}, ${hsvToHex(h, 100, v)})`);
     if (valSlider) valSlider.style.setProperty('--track-gradient', `linear-gradient(to right, ${hsvToHex(h, s, 0)}, ${hsvToHex(h, s, 100)})`);
     if (target.stepsMapName) {
-      document.querySelectorAll(`.configure-step-color-swatch[data-step-color-picker-key="${target.key}"][data-step-color-picker-steps-map="${target.stepsMapName}"][data-step-color-picker-index="${target.stepIndex}"]`).forEach((btn) => { btn.style.background = hex; });
-      document.querySelectorAll(`.configure-step-color-hex-btn[data-step-hex-toggle-key="${target.key}"][data-step-hex-toggle-steps-map="${target.stepsMapName}"][data-step-hex-toggle-index="${target.stepIndex}"]`).forEach((btn) => { btn.textContent = hex; });
+      document.querySelectorAll(`.configure-step-color-swatch[data-step-color-picker-key="${target.key}"][data-step-color-picker-steps-map="${target.stepsMapName}"][data-step-color-picker-index="${target.stepIndex}"][data-step-color-picker-which="${target.which}"]`).forEach((btn) => { btn.style.background = hex; });
+      document.querySelectorAll(`.configure-step-color-hex-btn[data-step-hex-toggle-key="${target.key}"][data-step-hex-toggle-steps-map="${target.stepsMapName}"][data-step-hex-toggle-index="${target.stepIndex}"][data-step-hex-toggle-which="${target.which}"]`).forEach((btn) => { btn.textContent = hex; });
     } else {
       document.querySelectorAll(`.configure-color-circle-btn[data-color-key="${target.key}"][data-color-category="${target.category}"][data-color-which="${target.which}"]`).forEach((btn) => { btn.style.background = hex; });
       document.querySelectorAll(`.configure-color-hex-btn[data-hex-key="${target.key}"][data-hex-category="${target.category}"][data-hex-which="${target.which}"]`).forEach((btn) => { btn.textContent = hex; });
@@ -6595,7 +8248,7 @@
     // object (never a bare falsy index) since the source/dest split -
     // still checked against null explicitly rather than as a boolean,
     // just no longer for the 0-index reason that used to apply.
-    if (!configureColorPickerOpen && !configureHexEditing && !configureItemDropdownOpen && !configureSettingsDropdownOpen && configureWireDropdownOpen === null && !wireColorPickerOpen && !wireHexEditing && !switchTriggerDropdownOpen && !logicTriggerDropdownOpen && !logicFieldDropdownOpen) return;
+    if (!configureColorPickerOpen && !configureHexEditing && !configureItemDropdownOpen && !configureSettingsDropdownOpen && configureWireDropdownOpen === null && !wireColorPickerOpen && !wireHexEditing && !switchTriggerDropdownOpen && !logicTriggerDropdownOpen && !logicFieldDropdownOpen && !pulseSourceDropdownOpen) return;
     const pickerWasOpen = !!configureColorPickerOpen || !!wireColorPickerOpen;
     configureColorPickerOpen = null;
     configureHexEditing = null;
@@ -6607,6 +8260,7 @@
     switchTriggerDropdownOpen = null;
     logicTriggerDropdownOpen = null;
     logicFieldDropdownOpen = null;
+    pulseSourceDropdownOpen = null;
     renderDrawTab();
     renderHeaderLeft();
     if (pickerWasOpen) window.BattleMap.requestRedraw();
@@ -6653,7 +8307,25 @@
   // closes it without picking anything. The menu's own item buttons
   // already stopPropagation on their own 'click' (see
   // renderMapContextMenu), so a genuine pick never reaches here.
+  //
+  // mapContextMenuJustOpened guards against a real, found-by-testing
+  // bug specific to the Break confirm (the only thing that ever opens
+  // this menu from a plain LEFT click rather than a right-click): a
+  // real mouse click is mousedown+mouseup+a trailing native 'click'
+  // event, all fired by the browser as part of the one gesture. map.js
+  // recognizes "a click happened" from the mousedown/mouseup pair
+  // (see map.js), which is when Break's confirm actually opens - but
+  // the SAME gesture's own trailing 'click' event still bubbles to
+  // document afterward, and without this guard it would immediately
+  // close the confirm this exact click just opened. The existing wire
+  // menu never hit this because it only ever opens from a right-click
+  // (a 'contextmenu' event), which has no trailing 'click' to race
+  // against. setTimeout(0) clears the guard once this gesture's events
+  // have all finished firing, well before any later, genuinely
+  // separate click should be able to dismiss the menu.
+  let mapContextMenuJustOpened = false;
   document.addEventListener('click', () => {
+    if (mapContextMenuJustOpened) return;
     if (mapContextMenu) hideMapContextMenu();
   });
 
@@ -6743,4 +8415,161 @@
   // is the first real paint of the sidebar and header.
   setActiveSideTab('draw');
   renderHeaderLeft();
+
+  // Small, additive export (same shape as window.BattleMap/
+  // window.SideTabRenderers) so other files can read the DM's current
+  // primary/secondary paint colors without reaching into this IIFE's
+  // private state - the creature tray (see tray.js) colors its tokens
+  // from these, the same colors every other placeable already draws
+  // itself with (walls, textures, ...), rather than inventing its own
+  // separate palette.
+  window.BattleDraw = {
+    getColors() {
+      return { primary: paintPrimaryColor, secondary: paintSecondaryColor };
+    },
+
+    // A placed token's own paint colors (outer ring = primary, inner
+    // backing = secondary) - defaults to the fixed DEFAULT_PRIMARY_
+    // COLOR/DEFAULT_SECONDARY_COLOR pair until the Paint tool has
+    // actually touched this specific cell (see tokenColors' own
+    // declaration comment and the Paint-tool click handler above),
+    // exactly the same "type default until painted" convention every
+    // other category's own default*ColorsFor already follows - NOT the
+    // DM's current live Paint selection, which is what an unpainted
+    // token used to render in before tokenColors existed. tray.js's
+    // own renderTokens calls this once per token per frame instead of
+    // reaching into this file's private tokenColors Map directly.
+    getTokenColors(cellKey) {
+      const override = tokenColors.get(cellKey);
+      return {
+        primary: (override && override.primary) || DEFAULT_PRIMARY_COLOR,
+        secondary: (override && override.secondary) || DEFAULT_SECONDARY_COLOR,
+      };
+    },
+
+    // Carries a token's own paint override from its old cell key to
+    // its new one - used by tray.js's Spawn-tab reposition drag (see
+    // that section's own comment), which moves a token WITHOUT going
+    // through this file's own moveItem (that only runs for the Select-
+    // tool Arrange-mode path). Same "delete both, set only if there
+    // was one to carry" shape as moveItem's own 'token' branch.
+    moveTokenColor(oldKey, newKey) {
+      if (oldKey === newKey) return;
+      const color = tokenColors.get(oldKey);
+      tokenColors.delete(oldKey);
+      tokenColors.delete(newKey);
+      if (color) tokenColors.set(newKey, color);
+    },
+
+    // Same reasoning as moveTokenColor immediately above, but for wires
+    // instead of paint: the Spawn-tab reposition drag moves a token
+    // without going through this file's own moveItem, so it's the one
+    // move path that doesn't automatically hit moveItem's own trailing
+    // updateWireReferences call. Without this, a wired token dragged
+    // from the tray would leave its wires pointing at the now-empty old
+    // cell - wires would visually disjoint and no longer actually fire.
+    // Just delegates to the same repoint-both-ends helper moveItem uses.
+    moveTokenWires(oldKey, newKey) {
+      if (oldKey === newKey) return;
+      updateWireReferences(oldKey, 'token', newKey, 'token');
+      window.BattleMap.requestRedraw();
+    },
+
+    // Lets tray.js push a real undo step for the one placement action
+    // that's genuinely its own (dragging a token out of the tray onto
+    // the map - see placeFromTray) using the exact same undo stack
+    // every other placement already uses, rather than a separate one
+    // of its own. snapshotState/restoreState above already fold
+    // window.CreatureTray's own snapshot/restore into every step this
+    // takes, so a token's placement/movement/deletion undoes right
+    // alongside whatever wall/texture/structure/logic edit happened in
+    // the same step.
+    pushUndoSnapshot,
+
+    // Puts down whatever Draw tool is currently equipped - called from
+    // app.js's setActiveSideTab whenever the DM actually switches side
+    // tabs (Draw/Spawn/Spells/Play), so a tool never stays armed (and,
+    // for Configure specifically, its target never stays highlighted
+    // on the map) once the DM has moved on to a different mode. Just
+    // reruns equipTool's own toggle-off path (same as clicking the
+    // active tool's own header button, or its hotkey, a second time) -
+    // that already clears configureTarget/cancels a pending wire/drops
+    // an in-progress Arrange drag and redraws every surface that
+    // cares, so there's nothing tool-switching-specific to duplicate
+    // here.
+    unequipActiveTool() {
+      if (activeTool) equipTool(activeTool);
+    },
+
+    // Re-renders the Configure panel's sidebar/header in place, without
+    // touching configureTarget/configureSelectedItem or pushing an undo
+    // step - just a plain repaint. Lets tray.js ask for one whenever a
+    // token's own name/acronym/number changed out from under an
+    // ALREADY-OPEN Configure row (an IT-side rename arriving via
+    // syncFromEntities, or the far end of BT's own paired-rename round
+    // trip - see window.CreatureTray.renameToken), which otherwise sits
+    // stale until the DM re-picks the same creature. renderDrawTab/
+    // renderHeaderLeft already re-read every Map/CreatureTray call live
+    // on each render, so a plain repaint is all a name change needs.
+    //
+    // Guarded on Draw actually being the active side tab first -
+    // renderDrawTab/renderHeaderLeft unconditionally overwrite
+    // sideScrollEl/headerLeftEl based on THIS file's own activeTool,
+    // with no awareness of which side tab (Draw/Spawn/Spells/Play) is
+    // actually showing right now (that's app.js's own state - see
+    // window.isSideTabActive). Without this guard, an entity-sync push
+    // arriving while the DM is on the Spawn tab (loading a creature
+    // while IT is connected always triggers one) would blow away
+    // whatever the Spawn tab had drawn into the sidebar and replace it
+    // with the Draw tool's own panel, even though activeSideTab never
+    // actually left Spawn - exactly the bug this guard exists to avoid.
+    refreshConfigurePanel() {
+      if (!window.isSideTabActive || !window.isSideTabActive('draw')) return;
+      renderDrawTab();
+      renderHeaderLeft();
+    },
+
+    // The token's currently-shown acronym - a manual Label override
+    // (Configure tool's Settings subsection) if one's been set, else
+    // whatever tray.js would auto-derive from the creature's name (see
+    // tray.js's acronymOf/t.acronym). tray.js's own renderTokens (and
+    // the Configure panel's Label field, prefilling with the CURRENT
+    // effective value) both reach through this one seam rather than
+    // reading tokenAcronymOverrides directly, matching getTokenColors'
+    // own role for tokenColors.
+    getTokenAcronym(cellKey) {
+      const override = tokenAcronymOverrides.get(cellKey);
+      if (override) return override;
+      const t = window.CreatureTray && window.CreatureTray.getAt(cellKey);
+      return t ? t.acronym : '??';
+    },
+
+    // Sets/clears the Label override - the Configure panel's own commit/
+    // reset handlers (see wireConfigurePanel) call these rather than
+    // touching tokenAcronymOverrides directly, matching setItemColorOverride/
+    // clearItemColorOverride's role for the generic color Maps. Caller
+    // is responsible for its own pushUndoSnapshot, same convention as
+    // every other Configure-panel edit in this file.
+    setTokenAcronymOverride(cellKey, text) {
+      const trimmed = String(text || '').trim().slice(0, 4);
+      if (trimmed) tokenAcronymOverrides.set(cellKey, trimmed);
+      else tokenAcronymOverrides.delete(cellKey); // an emptied field is the same as never having set one
+    },
+    clearTokenAcronymOverride(cellKey) {
+      tokenAcronymOverrides.delete(cellKey);
+    },
+
+    // Same reasoning as moveTokenColor/moveTokenWires above, but for the
+    // Label override - the Spawn-tab reposition drag bypasses moveItem
+    // entirely, so it's the one move path that needs its own explicit
+    // carry-across-a-move call for every per-instance token override
+    // this file owns.
+    moveTokenAcronym(oldKey, newKey) {
+      if (oldKey === newKey) return;
+      const label = tokenAcronymOverrides.get(oldKey);
+      tokenAcronymOverrides.delete(oldKey);
+      tokenAcronymOverrides.delete(newKey);
+      if (label) tokenAcronymOverrides.set(newKey, label);
+    },
+  };
 })();

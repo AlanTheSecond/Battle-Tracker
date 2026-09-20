@@ -363,6 +363,26 @@ input { font-family: inherit; }
   font-size: 8px;
   line-height: 1;
   color: var(--text-muted);
+  flex-shrink: 0; /* never squeezed by a long label text sharing the button - see .wire-endpoint-label-text */
+}
+/* The CLOSED display of a wire endpoint (a wire picker/reopen/pulse-
+   source button) - a creature's name can run far longer than any other
+   category's fixed typeId-derived label ever does, and has no length
+   limit of its own (see wireEndpointLabel's own comment). Truncating it
+   by character count doesn't actually track the button's real pixel
+   width (a wide font, a narrower button elsewhere - the two drift), so
+   this is real CSS ellipsis instead, on its own span rather than the
+   button itself: a bare text node sharing a flex container with the
+   caret icon doesn't reliably ellipsis (the two are separate flex
+   items, and text-overflow only ever applies within a single block of
+   its own), so the label gets its own shrinkable, truncating box and
+   the caret (flex-shrink: 0 above) never gets squeezed out by it. */
+.wire-endpoint-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .header-dropdown {
@@ -386,6 +406,20 @@ input { font-family: inherit; }
   font-size: 11px;
   text-align: left;
   color: var(--text-muted);
+  /* An open dropdown has a lot more room than the closed trigger button
+     that opens it, but a creature's name has no length cap of its own
+     (see .wire-endpoint-label-text's own comment) and was still wide
+     enough to wrap some option rows onto two lines. display:block (not
+     the default inline) is what lets white-space:nowrap + a max-width
+     actually clip a plain text button rather than just widening it -
+     there's no sibling icon in these rows fighting for space the way
+     the closed buttons' caret does, so a direct ellipsis here (no
+     dedicated inner span needed) is enough. */
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .header-dropdown-item:last-child { border-bottom: none; }
 .header-dropdown-item:hover:not(:disabled) {
@@ -803,9 +837,7 @@ input { font-family: inherit; }
 }
 .header-wire-picker-btn {
   max-width: 110px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0; /* lets the button shrink to its max-width cap instead of the flex row just growing to fit a long label - the actual truncation happens inside, see .wire-endpoint-label-text */
 }
 .header-wire-picker-btn:disabled {
   opacity: 0.4;
@@ -839,14 +871,69 @@ input { font-family: inherit; }
 .header-configure-details.configure-rotation-line {
   gap: 4px;
 }
+/* The rotate button reuses .configure-rotate-btn/RESET_ICON verbatim,
+   but at the sidebar's own 22px/12px sizing it read as a near-invisible
+   speck crammed into this compact header row - sized up here (button
+   and icon both) so it's actually legible at a glance, not just
+   technically clickable. */
 .header-configure-details .configure-rotate-btn {
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
+}
+.header-configure-details .configure-rotate-btn svg {
+  width: 14px;
+  height: 14px;
+}
+/* Groups the whole Edit-mode details readout (position/rotation, the
+   color cluster, the settings gear) into one tight unit so they read as
+   a single control, with .header-left's own 14px gap only ever falling
+   between this cluster and its neighbors (the item dropdown, undo/
+   redo) - not pried apart internally into three separately-14px-gapped
+   siblings the way a flat run of children in that same flex row used
+   to. */
+.header-configure-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .header-color-reset-stack {
   display: flex;
   align-items: center;
   gap: 3px;
+}
+/* Configure's own primary/secondary row, paired with its small reset
+   button - same stacked-preview convention as the Paint tool's own
+   .header-color-stack (primary above secondary), just with each
+   preview's reset button riding along in the same row rather than a
+   full-size button dividing the two stacked previews. */
+.header-color-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+/* .configure-color-reset-btn's usual 20px box (sized for the sidebar's
+   own roomier rows) is TALLER than the 15px swatch it rides beside
+   here - align-items:center still lines the two up, but the row as a
+   whole inherits the button's 20px height, so the primary/secondary
+   stack above ends up 5px taller per row than the Paint tool's own
+   stack of two bare 15px swatches, visibly pulling the two previews
+   further apart even though both use the same .header-color-stack gap.
+   Capping the button itself down to the swatch's own 15px closes that
+   gap back to matching the Paint tool's spacing exactly. */
+.header-color-row .configure-color-reset-btn {
+  width: 15px;
+  height: 15px;
+  padding: 0; /* .configure-color-reset-btn never zeroes the browser's own default button padding - harmless at the sidebar's roomier 20px box, but at this button's smaller 15px box here that same fixed padding was eating into the available space and squashing the icon down further than the width/height above alone would explain */
+  box-sizing: border-box;
+}
+/* The icon itself also gets scaled down a notch here - the generic
+   12px RESET_ICON (sized for the sidebar's 20px button) all but fills
+   this smaller 15px box edge to edge once the button's own padding is
+   zeroed out above, reading as oversized/crowded rather than a small
+   header reset control. */
+.header-color-row .configure-color-reset-btn svg {
+  width: 10px;
+  height: 10px;
 }
 
 /* ---------- Battlemap ---------- */
@@ -1138,6 +1225,103 @@ input { font-family: inherit; }
 .configure-item-name {
   font-weight: 600;
 }
+/* A creature token's name plus its rename pencil - same row, small gap,
+   so the button sits right up against the name rather than drifting to
+   the far edge of the card. */
+.configure-item-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.configure-token-rename-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+}
+.configure-token-rename-btn:hover {
+  color: var(--text);
+}
+.configure-token-rename-btn svg {
+  width: 11px;
+  height: 11px;
+}
+.configure-token-name-input {
+  background: var(--surface-mid);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  width: 140px;
+  outline: none;
+}
+/* A creature token's Label setting - deliberately NOT the pill-shaped
+   .configure-color-chip its Color rows use just above: a color swatch
+   genuinely needs that chip (swatch + hex text grouped as one control),
+   but Label is just a short typed value, so it gets a plain bordered
+   text box instead - the same look/weight as the rename input
+   (.configure-token-name-input) up in the name row, just narrower and
+   right-aligned since it's holding a short acronym rather than a full
+   name. .configure-token-label-row pushes this box (plus its reset
+   button, grouped in .configure-token-label-controls so they move as
+   one unit) to the row's right edge, opposite the "Label:" text on the
+   left - the same left-label/right-value shape Recolor's toggle rows
+   and Move's rotation row already use elsewhere in this panel. */
+.configure-token-label-row {
+  justify-content: space-between;
+}
+.configure-token-label-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.configure-token-label-input {
+  background: var(--surface-mid);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--text);
+  text-align: right;
+  width: 56px;
+  flex-shrink: 0;
+  outline: none;
+}
+.configure-token-label-input:focus {
+  border-color: var(--accent-active);
+}
+.configure-token-label-reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+.configure-token-label-reset-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.configure-token-label-reset-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.configure-token-label-reset-btn:disabled {
+  opacity: 0.3;
+}
 
 .configure-subsection-label {
   font-size: 9px;
@@ -1231,6 +1415,33 @@ input { font-family: inherit; }
 }
 .configure-toggle-switch.on .configure-toggle-thumb {
   transform: translateX(15px);
+}
+
+/* Recolor's "Set Color" enable checkboxes (renderRecolorColorCheckbox) -
+   sits to the left of each Primary/Secondary row, filled by default per
+   spec. A plain checkbox rather than the toggle-switch above since this
+   is a per-category on/off, not a state with a meaningful "off"
+   direction the way a switch/lever implies. */
+.configure-checkbox-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--bg);
+}
+.configure-checkbox-btn.checked {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
+  color: var(--bg);
+}
+.configure-checkbox-btn:hover {
+  border-color: var(--text-muted);
 }
 
 /* A "+/-" sign button (Hide's opacity adjust direction, Move's rotate
@@ -1335,6 +1546,16 @@ input { font-family: inherit; }
   padding: 2px 4px;
   font: inherit;
 }
+/* The placeholder "y" (height) field in Move's New Position/Adjust
+   rows - shown but inert until a real Y-axis exists (see
+   renderVectorRow's own comment). Dimmed rather than hidden, per the
+   person's explicit direction. */
+.configure-vector-field.disabled {
+  opacity: 0.4;
+}
+.configure-vector-field.disabled .configure-vector-input {
+  cursor: not-allowed;
+}
 /* A sequence step's own color swatch - same circular button as the
    base (non-sequenced) case's .configure-color-circle-btn, opening the
    same SV-square-plus-sliders picker (see getPickerTargetHex/
@@ -1427,9 +1648,7 @@ input { font-family: inherit; }
 }
 .configure-trigger-btn {
   max-width: 160px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0; /* lets the button shrink to its max-width cap instead of growing to fit a long label - the actual truncation happens inside, see .wire-endpoint-label-text */
 }
 .configure-trigger-btn:disabled {
   opacity: 0.4;
@@ -1531,14 +1750,30 @@ input { font-family: inherit; }
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0; /* lets configure-trigger-btn's own ellipsis truncation actually kick in inside a flex child */
+  min-width: 0; /* lets its children actually shrink instead of overflowing the row */
 }
-/* Two endpoint buttons now share this row instead of one label plus
-   one dropdown - .configure-trigger-btn's usual 160px max-width was
-   sized for a single button and would overflow the sidebar's width
-   with two of them side by side, so this narrows just the pair here. */
+/* The three hungry elements on this row - the source button, the dest
+   button, and the color chip - share whatever width is actually left
+   after the arrow and the remove button (both fixed-size) take theirs,
+   shrinking proportionally against each other rather than one of them
+   (fixed-width) starving another (a long creature name filling out
+   both name buttons used to squeeze the color chip's hex code down to
+   "#1..." on its own, since only the color chip was actually flexible).
+   flex-basis 0 means each one's SHARE of the row ignores its own
+   content width entirely and just splits the space evenly (2:2:3, via
+   flex-grow, so the color chip - naturally the widest at rest - gets a
+   little more room than either name button); min-width:0 is what lets
+   any of them actually shrink past their own content size, and each
+   one's own inner ellipsis (.wire-endpoint-label-text for the name
+   buttons, .configure-wire-hex-btn for the chip) is what makes
+   "shrink" mean "truncate with an ellipsis" instead of just clipping
+   raw. */
+.configure-wire-connection-main .configure-trigger-wrap {
+  flex: 2 1 0;
+  min-width: 0;
+}
 .configure-wire-connection-main .configure-trigger-btn {
-  max-width: 84px;
+  width: 100%;
 }
 .configure-wire-arrow {
   flex-shrink: 0;
@@ -1557,12 +1792,39 @@ input { font-family: inherit; }
 .configure-wire-remove-btn:hover {
   color: #c0392b; /* Delete's own red, for a destructive action, but only on hover - not tinted red at rest like Delete's map highlight */
 }
+.configure-wire-connection-main .configure-wire-color-row {
+  flex: 3 1 0;
+  min-width: 0;
+}
 
 .configure-color-row {
   position: relative; /* anchors the color picker dropdown below */
   display: flex;
   align-items: center;
   gap: 8px;
+}
+/* Recolor's "Set Color" section wraps each Primary/Secondary
+   .configure-color-row with its own enable checkbox immediately to the
+   left - a plain flex row so the two read as one control, checkbox
+   included in the same line rather than floated separately. */
+.configure-recolor-color-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.configure-recolor-color-line .configure-color-row {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+}
+/* A disabled Primary/Secondary row (its checkbox unchecked) dims just
+   the color row itself, not the checkbox - the checkbox needs to stay
+   fully legible/clickable so it's obvious what to click to turn the
+   row back on. Still editable while dimmed (a firing skips it either
+   way) so a color can be set up ahead of re-enabling it. */
+.configure-recolor-color-line.disabled .configure-color-row {
+  opacity: 0.4;
 }
 .configure-color-label {
   flex-shrink: 0;
@@ -1641,10 +1903,11 @@ input { font-family: inherit; }
    entirely separate classes for the hex/reset controls so this row's
    event wiring (see wireWireColorRows) can never cross-fire with Edit
    mode's own generic color handlers, which query by class and run
-   regardless of which mode is actually showing. */
-.configure-wire-color-row {
-  margin-top: 4px;
-}
+   regardless of which mode is actually showing. Its own flex/min-width
+   sizing as a flex ITEM of the connection row lives with the other two
+   above (.configure-wire-connection-main .configure-wire-color-row) -
+   all three share the row's space proportionally rather than one being
+   fixed-width and starving the others. */
 .configure-wire-color-native {
   flex-shrink: 0;
   width: 20px;
@@ -1677,6 +1940,16 @@ input { font-family: inherit; }
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* white-space/min-width/flex are what actually make the ellipsis
+     kick in - without them a flex item's default min-width is its own
+     content width, so the hex text never shrinks and instead pushes
+     the connection row (and the remove button past it) wider than the
+     sidebar, rather than compressing down to "#12..." the way it used
+     to before this row grew a second endpoint button competing for
+     the same space. */
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 .configure-wire-hex-input {
   background: none;
@@ -1753,4 +2026,467 @@ input { font-family: inherit; }
 .draw-swatch-texture {
   padding: 0;
   overflow: hidden;
+}
+
+/* ---------- Spawn tab (internal Bestiary - see spawn-tab.js) ----------
+   Deliberately modeled on Initiative Tracker's own Bestiary sidebar
+   (.stat-block-card/.stat-block-form/.btn-primary/.btn-ghost over
+   there) - same card look, same quick-create form shape - just
+   re-themed onto BT's own surface/border/accent tokens instead of
+   copying IT's class names verbatim, since BT has no .btn-primary/
+   .btn-ghost of its own yet and this is the first thing here that
+   would need them. */
+.spawn-new-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.spawn-new-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.spawn-new-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.spawn-creature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 280px;
+}
+/* A plain, non-interactive card for now (IT's own equivalent is a
+   button that spawns an instance into the encounter on click) - BT has
+   nowhere to spawn a creature onto yet, so this only carries its two
+   explicit actions (edit/delete) rather than also implying a click
+   does something. It still gets IT's own hover highlight though (on
+   request, even without a click behavior behind it yet) - same
+   var(--accent) border IT's .stat-block-card:hover uses, not
+   --accent-active, matching IT's own resting-hover distinction from an
+   actively-pressed state. */
+.spawn-creature-card {
+  position: relative;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.spawn-creature-card:hover {
+  border-color: var(--accent);
+}
+.spawn-creature-name {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 48px; /* clears the edit/delete buttons pinned top-right */
+}
+.spawn-creature-meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.spawn-creature-edit,
+.spawn-creature-delete {
+  position: absolute;
+  top: 6px;
+  background: none;
+  border: none;
+  line-height: 1;
+  padding: 2px 4px;
+  color: var(--text-muted);
+}
+.spawn-creature-edit {
+  right: 26px;
+  font-size: 13px;
+}
+.spawn-creature-delete {
+  right: 8px;
+  font-size: 14px;
+}
+.spawn-creature-edit:hover { color: var(--accent-active); }
+.spawn-creature-delete:hover { color: #c0392b; /* same destructive-red-on-hover convention as .configure-wire-remove-btn */ }
+
+/* Packages + drag-and-drop (paired mode only) - mirrors IT's own
+   .package-card/.sb-package-toggle/.package-member-card/
+   .package-member-list/.stat-block-card.dragging family exactly, just
+   re-themed onto BT's spawn- prefix like the rest of this section. */
+.spawn-package-card {
+  border-left: 3px solid var(--accent);
+}
+.spawn-package-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.spawn-package-toggle:hover {
+  color: var(--text);
+}
+.spawn-package-chevron {
+  width: 10px;
+  height: 10px;
+  transition: transform 0.15s ease;
+}
+.spawn-package-chevron.expanded {
+  transform: rotate(180deg);
+}
+/* A package member shown in the expanded list beneath its package -
+   indented and slightly recessed so it visually reads as "inside" the
+   card above it, same as IT's own .package-member-card. */
+.spawn-package-member-card {
+  margin-left: 16px;
+  /* Explicit rather than relying on flex stretch to subtract the
+     margin on its own - matches IT's own fix for the same clipping bug
+     (see its .package-member-card). */
+  width: calc(100% - 16px);
+  background: var(--surface);
+  border-color: var(--border);
+}
+.spawn-package-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+  border-radius: 4px;
+  transition: background 0.1s ease, box-shadow 0.1s ease, padding 0.1s ease;
+}
+/* Extra horizontal padding is exempt from the base rule above and only
+   applies here, while actively highlighted as a drop target - member
+   cards shrink to match automatically (see .spawn-package-member-
+   card's own width), opening a real gap between the cards and the
+   highlight ring instead of it sitting flush against them. Matches
+   IT's own fix for the same issue. */
+.spawn-package-member-list.spawn-package-drop-target-active {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  padding: 4px 8px;
+}
+/* Drag-to-reorder feedback - the dragged card dims in place, and
+   whatever it's currently hovering over gets a colored line on the
+   edge it'll land on (top or bottom half, whichever the cursor is
+   closer to) - identical to IT's own .stat-block-card equivalents. */
+.spawn-creature-card.dragging {
+  opacity: 0.4;
+}
+.spawn-creature-card.drag-over-top {
+  box-shadow: inset 0 3px 0 0 var(--accent);
+}
+.spawn-creature-card.drag-over-bottom {
+  box-shadow: inset 0 -3px 0 0 var(--accent);
+}
+
+/* The "+ New"/edit form - same field/action shape as IT's own
+   #statBlockForm, minus everything BT's Bestiary doesn't have (Init
+   bonus, the Advanced link). A new creature's form sits at the top of
+   the card list (see spawn-tab.js); an edit's form takes the exact
+   place of the card being edited, rather than appearing anywhere else -
+   same element either way. */
+.spawn-creature-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.spawn-creature-form input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+/* Name and HP share one row - BT's sidebar (312px) has real width to
+   spare for it, unlike IT's own 260px one where HP sits in its own row
+   below Name. Name has no label of its own (placeholder text only,
+   same as IT), while HP does - align-items:flex-end lines up the two
+   actual <input> boxes' bottoms despite that asymmetry, rather than the
+   name input floating above HP's due to HP's label pushing it down. */
+.spawn-form-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.spawn-form-name-input {
+  flex: 1;
+  min-width: 0;
+}
+.spawn-form-hp-field {
+  flex-shrink: 0;
+  width: 70px;
+}
+.spawn-creature-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* Left-aligned, naturally sized (not stretched full-width) - same as
+   IT's own .form-row, which has no flex:1/justify-content of its own
+   either; Save/Cancel there just size to their own padded content and
+   sit flush left. Together the two buttons land around 45% of this
+   card's row width (vs. roughly 55% on IT's narrower 260px sidebar) -
+   that's a natural consequence of matching IT's sizing approach on a
+   wider card, not a separate percentage rule to maintain by hand. */
+.spawn-form-row {
+  display: flex;
+  gap: 8px;
+}
+.spawn-btn-primary,
+.spawn-btn-ghost {
+  border-radius: 3px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+.spawn-btn-primary {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
+  color: var(--bg);
+  font-weight: 600;
+}
+.spawn-btn-primary:hover { background: var(--accent); border-color: var(--accent); }
+.spawn-btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+.spawn-btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
+
+/* Paired mode only, from here down - Import/Package icon buttons, the
+   full form's Init bonus field, and the Advanced link. None of these
+   exist in the DOM at all while standalone (see spawn-tab.js's
+   itConnected branch), so there's no "hidden" state to style, just
+   rules that simply never match until IT is actually paired. */
+.spawn-header {
+  /* draw-section-header-first already sets up the space-between flex
+     row (title left, actions right) - this only needs to keep that
+     right-hand side from collapsing the three paired buttons onto each
+     other the way a single .spawn-new-btn never had to worry about. */
+  gap: 6px;
+}
+.spawn-header-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Same box model as IT's own .bestiary-icon-btn - fixed height shared
+   with the "+ New" text button beside it, so the row doesn't end up
+   with the icon buttons sitting shorter/taller than "+ New" the way a
+   plain content-sized button would. */
+.spawn-header-btns button {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.spawn-icon-btn {
+  width: 26px;
+  position: relative;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+.spawn-icon-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.spawn-icon-btn svg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 16px;
+}
+.spawn-form-init-field {
+  flex-shrink: 0;
+  width: 70px;
+}
+.spawn-btn-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 0;
+  align-self: flex-start;
+  text-decoration: none;
+}
+.spawn-btn-link:hover { color: var(--accent-active); }
+
+/* ---------- Creature tray (see tray.js) ---------- */
+/* The WRAPPER is what's fixed to the window itself (not the flex
+   layout - present in every mode, unaffected by the sidebar
+   collapsing/expanding, same reasoning as .map-viewport) and never
+   moves; it's only ever hidden outright (no tokens waiting at all -
+   see .creature-tray-wrapper.hidden). The BOX inside it (.creature-tray)
+   is the actual outlined/backed panel, and is what slides off when
+   manually collapsed - UNLIKE the sidebar's own wrapper/column/handle
+   split, the collapse handle (.creature-tray-collapse) is a CHILD of
+   this box, not a sibling left behind on the wrapper, so it slides
+   along with the box instead of staying put (see index.html's own
+   comment on this). The translateX distance is exactly 100% - the
+   box's own width, via the percentage - which lands the box (and the
+   button riding inside its left edge) just past the wrapper's right
+   offset: the box itself ends up fully off screen, while the button,
+   sitting at the box's left edge, ends up parked right at that offset
+   from the screen's right edge - still visible, still clickable,
+   the tray's only remaining on-screen trace once collapsed.
+   "About an inch off the header" / "an inch off the bottom" per spec,
+   using Chromium's 96-css-px-per-inch convention (same one map.js's
+   own CELL_SIZE comment leans on); the right offset is pulled in much
+   closer to the edge than that, per spec ("closer to the right of the
+   screen"). 58px matches .main-top-bar's own height, so the tray's
+   top edge clears the header exactly, then the extra inch. */
+.creature-tray-wrapper {
+  position: fixed;
+  top: calc(58px + 1in);
+  bottom: 1in;
+  right: 10px;
+  width: 64px;
+  z-index: 10;
+  transition: opacity 0.2s ease;
+}
+.creature-tray-wrapper.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.creature-tray {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  /* No overflow:hidden here (unlike before) - the collapse button now
+     lives inside this box, positioned at its left edge via a small
+     negative offset (see .creature-tray-collapse below), and clipping
+     would cut it off. .creature-tray-list below still clips/scrolls
+     its own token content on its own, so nothing is lost by removing
+     this. */
+  transition: transform 0.28s ease;
+}
+.creature-tray-wrapper.collapsed .creature-tray {
+  transform: translateX(100%); /* exactly the box's own width - see this section's header comment for why */
+}
+/* Identical to .side-collapse-tab (same size, color, hover), mirrored
+   to the tray's LEFT edge instead of the sidebar's right one - it's
+   the opposite side of the screen, so the rounded/flat ends flip too.
+   Positioned relative to .creature-tray (its new parent, itself
+   position: absolute - a valid containing block for this) rather than
+   the wrapper, so it slides along with the box instead of staying
+   fixed in place. */
+.creature-tray-collapse {
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 52px;
+  padding: 0;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px 0 0 6px;
+  z-index: 5;
+  cursor: pointer;
+}
+.creature-tray-collapse:hover { background: var(--accent-active); }
+.creature-tray-list {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--border) transparent;
+}
+/* Thinner than the app's usual 6px (.side-scroll etc.) - this column
+   is only 64px wide, so the standard width reads as heavy here. */
+.creature-tray-list::-webkit-scrollbar { width: 4px; }
+.creature-tray-list::-webkit-scrollbar-track { background: transparent; }
+.creature-tray-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.creature-tray-list::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.creature-tray-token {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  cursor: grab;
+}
+.creature-tray-token.dragging {
+  opacity: 0.4;
+}
+.creature-tray-token-fill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 2px solid var(--accent);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.1;
+  user-select: none;
+}
+.creature-tray-token-fill small {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.creature-tray-token-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.creature-tray-token:hover .creature-tray-token-remove {
+  opacity: 1;
+}
+.creature-tray-token-remove:hover {
+  color: var(--accent-active);
+  border-color: var(--accent-active);
 }

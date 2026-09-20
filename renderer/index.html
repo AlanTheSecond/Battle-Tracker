@@ -27,6 +27,29 @@
       <div class="map-context-menu" id="mapContextMenu"></div>
     </div>
 
+    <!-- Creature tray - see tray.js. Sits outside both the map viewport
+         and the sidebar's flex layout on purpose (floats fixed to the
+         window's own right edge, per spec) - a GREY feature, present
+         in every mode, whether or not Initiative Tracker is connected.
+         Hidden by default; tray.js shows/hides and fills it.
+
+         Unlike the sidebar's own wrapper/sliding-column/attached-handle
+         split, the collapse button here lives INSIDE the sliding box
+         (.creature-tray) rather than beside it on the non-moving
+         wrapper - per spec, the button has to follow the tray off
+         screen when it collapses, not stay behind as a detached
+         floating handle. The wrapper still never moves (it's what
+         "floats" at the fixed position); it's the box itself that
+         both slides AND carries the button along with it, landing the
+         button flush at the box's original edge - still reachable,
+         still visible - once the rest of the box is off screen. -->
+    <div class="creature-tray-wrapper hidden" id="creatureTrayWrapper">
+      <div class="creature-tray" id="creatureTray">
+        <button type="button" class="creature-tray-collapse" id="creatureTrayCollapseBtn" title="Collapse"></button>
+        <div class="creature-tray-list" id="creatureTrayList"></div>
+      </div>
+    </div>
+
     <!-- LEFT SIDEBAR. Wrapped in its own container so the collapse
          tab (attached to the wrapper, see .side-collapse-tab) can sit
          at the column's current edge and slide along with it, while
@@ -100,7 +123,7 @@
       <div class="menu-layout">
         <nav class="menu-tabs">
           <button class="menu-tab-btn active" data-tab="settings">Settings</button>
-          <div class="menu-version">v0.2.0</div>
+          <div class="menu-version">v0.5.0</div>
         </nav>
         <div id="menuContent" class="menu-content">
           <!-- built by app.js based on the selected tab -->
@@ -112,5 +135,7 @@
   <script src="app.js"></script>
   <script src="map.js"></script>
   <script src="draw-tab.js"></script>
+  <script src="tray.js"></script>
+  <script src="spawn-tab.js"></script>
 </body>
 </html>

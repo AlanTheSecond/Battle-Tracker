@@ -108,6 +108,17 @@ window.SideTabRenderers = window.SideTabRenderers || {};
 window.SideTabHeaderRenderers = window.SideTabHeaderRenderers || {};
 
 function setActiveSideTab(tab) {
+  // Switching modes puts down whatever Draw tool is currently
+  // equipped (and, for Configure specifically, drops its target/
+  // highlight along with it) - guarded on an actual change so
+  // clicking the already-active tab's own button doesn't put down a
+  // tool the DM never left. window.BattleDraw might not exist yet
+  // this early (see the "first real paint" call below, made before
+  // draw-tab.js's own IIFE has finished setting it up) - nothing to
+  // unequip that first time regardless.
+  if (tab !== activeSideTab && window.BattleDraw && window.BattleDraw.unequipActiveTool) {
+    window.BattleDraw.unequipActiveTool();
+  }
   activeSideTab = tab;
   for (const btn of sideTabBtns) {
     btn.classList.toggle('active', btn.dataset.tab === tab);

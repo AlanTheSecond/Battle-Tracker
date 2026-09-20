@@ -312,7 +312,16 @@
   viewport.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const info = computeCellInfo(e.clientX, e.clientY);
-    for (const fn of contextMenuListeners) fn(info, e.clientX, e.clientY);
+    // A listener returning true means "handled, stop here" - added for
+    // the creature tray (see tray.js's onContextMenu), which needs to
+    // claim a right-click that landed on a token before draw-tab.js's
+    // own listener also opens its (unrelated) map-content context menu
+    // on top of it. Existing listeners that don't return anything
+    // (draw-tab.js's) are unaffected - undefined is falsy, so the loop
+    // just keeps going exactly as it always did.
+    for (const fn of contextMenuListeners) {
+      if (fn(info, e.clientX, e.clientY) === true) break;
+    }
   });
 
   // Listens on window, not just the viewport, so a drag that happens
@@ -578,6 +587,18 @@
     // whatever order renderers were registered.
     addOverlayRenderer(fn) { overlayRenderers.push(fn); scheduleDraw(); },
     requestRedraw: scheduleDraw,
+    // Converts a raw client (viewport-relative) position into world
+    // coordinates, the same conversion computeCellInfo does internally
+    // but without snapping to a cell/edge - for content that isn't
+    // grid-snapped at all, like the creature tray's free-floating
+    // tokens (see tray.js), which need a plain screen-to-world point
+    // for wherever a token gets dropped or dragged to.
+    screenToWorld(clientX, clientY) {
+      const rect = viewport.getBoundingClientRect();
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      return { worldX: (px - offsetX) / zoom, worldY: (py - offsetY) / zoom };
+    },
     // 'pan' (default), 'paint', 'line', or 'select' - see the mode
     // list at the dragBehavior declaration above.
     setDragBehavior(mode) {

@@ -1,6 +1,6 @@
 {
   "name": "battle-tracker",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Grid-based battlemap companion app for Initiative Tracker",
   "main": "main.js",
   "author": "Benjamin Kaschalk",
@@ -18,7 +18,9 @@
     "appId": "com.dm.battletracker",
     "productName": "BattleTracker",
     "asar": true,
-    "electronLanguages": ["en-US"],
+    "electronLanguages": [
+      "en-US"
+    ],
     "win": {
       "target": "portable"
     },
@@ -39,5 +41,8 @@
     "directories": {
       "output": "dist"
     }
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.11.0"
   }
 }
